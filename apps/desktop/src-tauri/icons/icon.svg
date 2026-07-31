@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="PeerSpan">
+  <defs>
+    <linearGradient id="bg" x1="64" y1="32" x2="448" y2="480" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#182723"/>
+      <stop offset="1" stop-color="#0c1512"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="110" y1="178" x2="404" y2="364" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9BDBC8"/>
+      <stop offset="1" stop-color="#3C9B7E"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect x="202" y="118" width="220" height="166" rx="30" fill="#172F28" stroke="#6DAF9B" stroke-width="18" opacity=".72"/>
+  <rect x="90" y="211" width="242" height="183" rx="32" fill="#10231D" stroke="url(#screen)" stroke-width="20"/>
+  <path d="M326 255L371 226" stroke="#D8A35F" stroke-width="20" stroke-linecap="round"/>
+  <path d="M178 440H245M211 394V438" stroke="#82C8B3" stroke-width="18" stroke-linecap="round"/>
+  <circle cx="198" cy="303" r="17" fill="#86CCB7"/>
+  <path d="M233 303H283" stroke="#86CCB7" stroke-width="16" stroke-linecap="round"/>
+</svg>

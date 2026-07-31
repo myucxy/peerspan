@@ -1,0 +1,28 @@
+# JavaScript
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Rust / Tauri
+target/
+**/target/
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.local.json
+
+# Windows native build output
+native/**/x64/
+native/**/Debug/
+native/**/Release/
+native/**/*.user
