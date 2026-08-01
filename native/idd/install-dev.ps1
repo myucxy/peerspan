@@ -12,6 +12,8 @@ param(
 
     [string]$ApplicationPath,
 
+    [string]$SunshinePath,
+
     [switch]$InstallerMode
 )
 
@@ -114,6 +116,32 @@ if ($ApplicationPath) {
                 -Program $resolvedApplicationPath `
                 -Protocol $rule.Protocol `
                 -LocalPort $rule.LocalPort `
+                -RemoteAddress LocalSubnet | Out-Null
+        }
+    }
+}
+
+if ($SunshinePath) {
+    $resolvedSunshinePath = (Resolve-Path -LiteralPath $SunshinePath -ErrorAction Stop).Path
+    if (-not (Test-Path -LiteralPath $resolvedSunshinePath -PathType Leaf)) {
+        throw "The bundled Sunshine executable was not found at $resolvedSunshinePath."
+    }
+    foreach ($protocol in @("TCP", "UDP")) {
+        $ruleName = "PeerSpan-Sunshine-LAN-$protocol"
+        if ($PSCmdlet.ShouldProcess($ruleName, "Allow bundled Sunshine traffic from the local subnet")) {
+            Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue |
+                Remove-NetFirewallRule -ErrorAction Stop
+            New-NetFirewallRule `
+                -Name $ruleName `
+                -DisplayName $ruleName `
+                -Group "PeerSpan" `
+                -Direction Inbound `
+                -Action Allow `
+                -Enabled True `
+                -Profile Domain, Private `
+                -Program $resolvedSunshinePath `
+                -Protocol $protocol `
+                -LocalPort Any `
                 -RemoteAddress LocalSubnet | Out-Null
         }
     }

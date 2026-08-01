@@ -104,6 +104,8 @@ pub struct Preferences {
     pub screen_edge: ScreenEdge,
     pub quality: QualityMode,
     pub release_shortcut: String,
+    #[serde(default)]
+    pub streaming_backend: StreamingBackend,
 }
 
 impl Default for Preferences {
@@ -115,8 +117,17 @@ impl Default for Preferences {
             screen_edge: ScreenEdge::Right,
             quality: QualityMode::Balanced,
             release_shortcut: "Ctrl+Alt+Shift+Esc".into(),
+            streaming_backend: StreamingBackend::SunshineMoonlight,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum StreamingBackend {
+    #[default]
+    SunshineMoonlight,
+    Native,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -203,6 +214,7 @@ pub struct RuntimeCapabilities {
     pub secure_pairing: Capability,
     pub secure_control: Capability,
     pub virtual_display: Capability,
+    pub streaming_backend: Capability,
     pub media_pipeline: Capability,
     pub input_injection: Capability,
 }
@@ -218,6 +230,9 @@ impl Default for RuntimeCapabilities {
             ),
             virtual_display: Capability::required(
                 "PeerSpan virtual display driver is not installed",
+            ),
+            streaming_backend: Capability::required(
+                "Sunshine and Moonlight runtimes have not been located",
             ),
             media_pipeline: Capability::planned("D3D11 capture and hardware codec spike pending"),
             input_injection: Capability::planned(

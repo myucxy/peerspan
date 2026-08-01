@@ -3,6 +3,7 @@ export type ViewKey = "home" | "display" | "nodes" | "settings";
 export type DeviceStatus = "online" | "busy" | "offline";
 export type ScreenEdge = "left" | "right" | "top" | "bottom";
 export type QualityMode = "clarity" | "balanced" | "responsive";
+export type StreamingBackend = "sunshineMoonlight" | "native";
 export type CapabilityState = "ready" | "requiresSetup" | "planned";
 
 export interface LocalDevice {
@@ -36,6 +37,7 @@ export interface Preferences {
   screenEdge: ScreenEdge;
   quality: QualityMode;
   releaseShortcut: string;
+  streamingBackend: StreamingBackend;
 }
 
 export interface Capability {
@@ -49,6 +51,7 @@ export interface RuntimeCapabilities {
   securePairing: Capability;
   secureControl: Capability;
   virtualDisplay: Capability;
+  streamingBackend: Capability;
   mediaPipeline: Capability;
   inputInjection: Capability;
 }

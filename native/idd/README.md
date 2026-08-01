@@ -48,4 +48,4 @@ pwsh -File native\idd\uninstall-dev.ps1 -Configuration Release -Platform x64 `
 - 上游许可：Microsoft Public License（见 `LICENSE.MS-PL`）
 - PeerSpan 修改：设备标识、稳定容器 ID、单显示器 1080p60 模式、最新帧共享纹理、诊断信息、控制器错误处理和可复现构建脚本
 
-本目录的上游派生代码继续遵循 MS-PL，不受 Rust 工作区的 MIT/Apache-2.0 声明覆盖。
+本目录的微软上游派生代码继续遵循 MS-PL，不受 PeerSpan 工作区 GPLv3 声明覆盖；它作为独立驱动程序与 GPLv3 用户态应用聚合分发。

@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub const PROTOCOL_VERSION: u16 = 4;
+pub const PROTOCOL_VERSION: u16 = 5;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
@@ -51,6 +51,8 @@ pub struct DisplayOffer {
     pub dpi_y: u16,
     pub rotation_degrees: u16,
     pub codec: VideoCodec,
+    #[serde(default)]
+    pub transport: StreamTransport,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -59,6 +61,16 @@ pub struct DisplayDecision {
     pub accepted: bool,
     pub reason: Option<String>,
     pub media_port: Option<u16>,
+    #[serde(default)]
+    pub game_stream_pairing_pin: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamTransport {
+    GameStream,
+    #[default]
+    PeerSpanNative,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -151,6 +163,7 @@ mod tests {
             accepted: false,
             reason: Some("media pipeline unavailable".into()),
             media_port: None,
+            game_stream_pairing_pin: None,
         });
 
         let json = serde_json::to_string(&message).expect("message should serialize");
@@ -169,6 +182,7 @@ mod tests {
             accepted: true,
             reason: None,
             media_port: Some(49_152),
+            game_stream_pairing_pin: None,
         });
 
         let json = serde_json::to_string(&message).expect("message should serialize");

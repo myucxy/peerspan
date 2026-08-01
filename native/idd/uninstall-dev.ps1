@@ -108,7 +108,7 @@ if ($RemoveTestCertificate) {
 }
 
 if ($RemoveFirewallRules) {
-    foreach ($ruleName in @("PeerSpan-LAN-TCP", "PeerSpan-LAN-UDP")) {
+    foreach ($ruleName in @("PeerSpan-LAN-TCP", "PeerSpan-LAN-UDP", "PeerSpan-Sunshine-LAN-TCP", "PeerSpan-Sunshine-LAN-UDP")) {
         if ($PSCmdlet.ShouldProcess($ruleName, "Remove the PeerSpan local-subnet firewall rule")) {
             Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue |
                 Remove-NetFirewallRule -ErrorAction Stop

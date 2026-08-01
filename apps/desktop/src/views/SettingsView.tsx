@@ -1,4 +1,4 @@
-import { CheckCircle2, CircleDashed, Clipboard, Info, Keyboard, MonitorCog, Network, Shield, Wrench } from "lucide-react";
+import { CheckCircle2, CircleDashed, Clipboard, Gauge, Info, Keyboard, MonitorCog, Network, Shield, Wrench } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { AppSnapshot, Capability, Preferences, QualityMode } from "../types";
 
@@ -37,6 +37,22 @@ export function SettingsView({ snapshot, onChangePreferences }: SettingsViewProp
       <div className="settings-layout">
         <div className="settings-stack">
           <section className="preference-card">
+            <div className="preference-heading"><span className="soft-icon"><Gauge size={19} /></span><div><h2>串流核心</h2><p>按会话选择媒体与输入实现</p></div></div>
+            <div className="backend-options" role="radiogroup" aria-label="串流核心">
+              <button type="button" role="radio" aria-checked={p.streamingBackend === "sunshineMoonlight"} className={p.streamingBackend === "sunshineMoonlight" ? "selected" : ""} onClick={() => update({ streamingBackend: "sunshineMoonlight" })}>
+                <span>{p.streamingBackend === "sunshineMoonlight" && <CheckCircle2 size={16} />}</span>
+                <div><strong>Sunshine + Moonlight</strong><small>默认 · GameStream、硬件编解码、FEC 与低延迟输入</small></div>
+                <em>推荐</em>
+              </button>
+              <button type="button" role="radio" aria-checked={p.streamingBackend === "native"} className={p.streamingBackend === "native" ? "selected" : ""} onClick={() => update({ streamingBackend: "native" })}>
+                <span>{p.streamingBackend === "native" && <CheckCircle2 size={16} />}</span>
+                <div><strong>PeerSpan 原生</strong><small>D3D11 / Media Foundation 回退与性能对照</small></div>
+                <em>兼容</em>
+              </button>
+            </div>
+          </section>
+
+          <section className="preference-card">
             <div className="preference-heading"><span className="soft-icon"><MonitorCog size={19} /></span><div><h2>连接</h2><p>管理启动与恢复策略</p></div></div>
             <div className="preference-row"><div><strong>随 Windows 启动</strong><small>登录后自动启动 PeerSpan</small></div><Toggle label="随 Windows 启动" checked={p.launchAtStartup} onChange={(launchAtStartup) => update({ launchAtStartup })} /></div>
             <div className="preference-row"><div><strong>自动恢复会话</strong><small>短暂断网或睡眠唤醒后尝试重新连接</small></div><Toggle label="自动恢复会话" checked={p.autoReconnect} onChange={(autoReconnect) => update({ autoReconnect })} /></div>
@@ -63,6 +79,7 @@ export function SettingsView({ snapshot, onChangePreferences }: SettingsViewProp
           <CapabilityRow name="安全配对" capability={snapshot.capabilities.securePairing} />
           <CapabilityRow name="认证控制通道" capability={snapshot.capabilities.secureControl} />
           <CapabilityRow name="虚拟显示器" capability={snapshot.capabilities.virtualDisplay} />
+          <CapabilityRow name="串流核心" capability={snapshot.capabilities.streamingBackend} />
           <CapabilityRow name="媒体管线" capability={snapshot.capabilities.mediaPipeline} />
           <CapabilityRow name="输入注入" capability={snapshot.capabilities.inputInjection} />
           <div className="fingerprint-box"><Shield size={16} /><div><small>本机身份指纹</small><code>{snapshot.localDevice.fingerprint}</code></div></div>

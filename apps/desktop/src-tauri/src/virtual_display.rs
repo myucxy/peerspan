@@ -51,7 +51,7 @@ impl VirtualDisplayRuntime {
                 let _ = self
                     .core
                     .set_virtual_display_capability(Capability::required(format!(
-                        "PeerSpan virtual display layout could not be applied: {error}"
+                        "PeerSpan virtual display remains active, but its layout could not be applied: {error}"
                     )));
                 return Err(error);
             }
@@ -61,17 +61,20 @@ impl VirtualDisplayRuntime {
 
         match self.backend.activate() {
             Ok(lease) => {
+                let instance_id = lease.instance_id().to_owned();
+                // Keep the software-device lease as soon as Windows starts the device node.
+                // RDP can temporarily veto display-topology refreshes; dropping the lease here
+                // would turn a healthy device into CM_PROB_PHANTOM and make retry impossible.
+                *active = Some(lease);
                 if let Err(error) = self.backend.position(edge) {
                     let _ = self
                         .core
                         .set_virtual_display_capability(Capability::required(format!(
-                            "PeerSpan virtual display layout could not be applied: {error}"
+                            "PeerSpan virtual display is started and retained, but its layout could not be applied: {error}. End the RDP display session or reboot if Windows requests it, then retry"
                         )));
                     return Err(error);
                 }
-                self.mark_ready(lease.instance_id())?;
-                *active = Some(lease);
-                Ok(())
+                self.mark_ready(&instance_id)
             }
             Err(error) => {
                 let detail = format!(
@@ -577,7 +580,8 @@ mod tests {
     struct FakeBackend {
         starts: Arc<AtomicUsize>,
         drops: Arc<AtomicUsize>,
-        error: Option<String>,
+        activation_error: Option<String>,
+        position_error: Option<String>,
     }
 
     struct FakeLease {
@@ -599,7 +603,7 @@ mod tests {
     impl VirtualDisplayBackend for FakeBackend {
         fn activate(&self) -> Result<Box<dyn DisplayLease>, String> {
             self.starts.fetch_add(1, Ordering::Relaxed);
-            if let Some(error) = &self.error {
+            if let Some(error) = &self.activation_error {
                 return Err(error.clone());
             }
             Ok(Box::new(FakeLease {
@@ -608,7 +612,7 @@ mod tests {
         }
 
         fn position(&self, _edge: ScreenEdge) -> Result<(), String> {
-            Ok(())
+            self.position_error.clone().map_or(Ok(()), Err)
         }
     }
 
@@ -623,7 +627,8 @@ mod tests {
     }
 
     fn runtime(
-        error: Option<&str>,
+        activation_error: Option<&str>,
+        position_error: Option<&str>,
     ) -> (
         VirtualDisplayRuntime,
         Arc<AtomicUsize>,
@@ -639,7 +644,8 @@ mod tests {
             Box::new(FakeBackend {
                 starts: Arc::clone(&starts),
                 drops: Arc::clone(&drops),
-                error: error.map(str::to_owned),
+                activation_error: activation_error.map(str::to_owned),
+                position_error: position_error.map(str::to_owned),
             }),
         );
         (runtime, starts, drops, directory)
@@ -647,7 +653,7 @@ mod tests {
 
     #[test]
     fn start_is_idempotent_and_stop_releases_the_device() {
-        let (runtime, starts, drops, directory) = runtime(None);
+        let (runtime, starts, drops, directory) = runtime(None, None);
         runtime.start().unwrap();
         runtime.start().unwrap();
         assert_eq!(starts.load(Ordering::Relaxed), 1);
@@ -681,7 +687,7 @@ mod tests {
 
     #[test]
     fn activation_failure_is_reported_as_required_setup() {
-        let (runtime, starts, drops, directory) = runtime(Some("driver is missing"));
+        let (runtime, starts, drops, directory) = runtime(Some("driver is missing"), None);
         assert_eq!(runtime.start(), Err("driver is missing".into()));
         assert_eq!(starts.load(Ordering::Relaxed), 1);
         assert_eq!(drops.load(Ordering::Relaxed), 0);
@@ -701,8 +707,32 @@ mod tests {
     }
 
     #[test]
+    fn layout_failure_retains_the_started_device_for_retry() {
+        let (runtime, starts, drops, directory) = runtime(None, Some("RDP topology veto"));
+        assert_eq!(runtime.start(), Err("RDP topology veto".into()));
+        assert_eq!(starts.load(Ordering::Relaxed), 1);
+        assert_eq!(drops.load(Ordering::Relaxed), 0);
+        assert!(
+            runtime
+                .core
+                .snapshot()
+                .unwrap()
+                .capabilities
+                .virtual_display
+                .detail
+                .contains("started and retained")
+        );
+        assert_eq!(runtime.start(), Err("RDP topology veto".into()));
+        assert_eq!(starts.load(Ordering::Relaxed), 1);
+        runtime.stop().unwrap();
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
+        drop(runtime);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn active_session_prevents_virtual_display_removal() {
-        let (runtime, _, drops, directory) = runtime(None);
+        let (runtime, _, drops, directory) = runtime(None, None);
         runtime.start().unwrap();
         let peer_id = Uuid::new_v4();
         runtime
@@ -720,7 +750,7 @@ mod tests {
                 addresses: vec![],
                 control_port: 37_622,
                 pairing_port: 37_621,
-                protocol_version: 4,
+                protocol_version: 5,
             })
             .unwrap();
         let session_id = Uuid::new_v4();

@@ -57,6 +57,7 @@ const previewSnapshot: AppSnapshot = {
     screenEdge: "right",
     quality: "balanced",
     releaseShortcut: "Ctrl+Alt+Shift+Esc",
+    streamingBackend: "sunshineMoonlight",
   },
   capabilities: {
     controlBridge: { state: "ready", detail: "Web 设计预览" },
@@ -64,7 +65,8 @@ const previewSnapshot: AppSnapshot = {
     securePairing: { state: "planned", detail: "Web 预览不启动配对监听器" },
     secureControl: { state: "planned", detail: "Web 预览不启动 TLS 控制监听器" },
     virtualDisplay: { state: "requiresSetup", detail: "虚拟显示驱动尚未安装" },
-    mediaPipeline: { state: "planned", detail: "D3D11 媒体管线技术尖刺待完成" },
+    streamingBackend: { state: "ready", detail: "Sunshine + Moonlight 高性能核心" },
+    mediaPipeline: { state: "ready", detail: "GameStream 硬件编解码与 FEC" },
     inputInjection: { state: "planned", detail: "认证会话建立后启用" },
   },
 };

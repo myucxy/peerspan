@@ -10,7 +10,9 @@
 - PeerSpan IddCx 虚拟显示驱动的 `INF`、测试签名 `CAT` 和 UMDF `DLL`；
 - 与该驱动包匹配的 PeerSpan 测试证书；
 - WebView2 Evergreen 离线安装程序；
+- Sunshine `v2026.516.143833` 与 Moonlight Qt `v6.1.0` 的官方 x64 便携核心；
 - 驱动、证书和仅限本地子网的防火墙规则安装/卸载脚本；
+- GPLv3/第三方许可证、固定源码提交与对应源代码获取说明；
 - 构建 commit、文件哈希和测试签名状态清单。
 
 包内的“全部驱动”只指 PeerSpan 项目自己的虚拟显示驱动。不得捆绑或覆盖 NVIDIA/AMD/Intel 显卡驱动、Windows 自带 `WUDFRd.sys` 等系统组件；这些组件必须由目标机 Windows Update 或硬件厂商维护，避免安装不匹配版本。
@@ -29,7 +31,7 @@ $env:PATH = "D:\Dev\Env\Rust\cargo\bin;$env:PATH"
 npm run build:installer
 ```
 
-首次构建 WebView2 离线包需要下载微软 Evergreen Standalone Installer。直连失败时只在当前终端设置代理：
+首次构建需要下载 WebView2 Evergreen Standalone Installer，以及固定版本的 Sunshine/Moonlight 官方便携包。脚本把后两者缓存到 `D:\Dev\Env\PeerSpan\downloads` 并强制校验 SHA-256。直连失败时只在当前终端设置代理：
 
 ```powershell
 $env:HTTP_PROXY = "http://127.0.0.1:7897"
@@ -55,9 +57,9 @@ Get-Content -Raw target\release\bundle\nsis\PeerSpan_0.1.0_x64-setup.exe.manifes
 
 1. 把单个 `PeerSpan_0.1.0_x64-setup.exe` 复制到目标机。
 2. 双击运行并接受 UAC；安装器会明确提示这是内部测试包。
-3. 安装器按机器安装应用，静默补齐 WebView2，信任测试证书，暂存并安装 PeerSpan 驱动，然后为应用添加 Domain/Private + LocalSubnet 防火墙规则。
+3. 安装器按机器安装应用与 Sunshine/Moonlight 核心，静默补齐 WebView2，信任测试证书，暂存并安装 PeerSpan 驱动，然后为 PeerSpan 和 Sunshine 添加 Domain/Private + LocalSubnet 防火墙规则。
 4. 若 Windows 报告驱动或显示栈需要重启，应先关闭工作并重启，再通过物理控制台或不占用 Windows 显示拓扑的管理链路启用虚拟屏。
-5. 从 Windows“应用和功能”卸载 PeerSpan；卸载钩子同时移除 PeerSpan 驱动包、对应测试证书和两条防火墙规则。
+5. 从 Windows“应用和功能”卸载 PeerSpan；卸载钩子同时移除 PeerSpan 驱动包、对应测试证书和四条防火墙规则，Tauri 随应用目录删除两个串流核心。
 
 活动 RDP 会话会加载 `Microsoft Remote Display Adapter` / `RdpIdd_IndirectDisplay`。Windows 可能因此以 `PNP_VetoOutstandingOpen` 拒绝显示栈重启；此时驱动可以已成功安装和启动，但新显示器仍不会进入桌面拓扑。不要把这种状态记录为虚拟屏验收通过。
 
@@ -81,6 +83,6 @@ source dirty: true
 - mDNS 已发现开发机 `HOME-PC`；
 - SetupAPI 记录软件设备配置完成且设备节点 `Start` 返回 `SUCCESS`。
 
-尚未通过：活动 RDP 的 `RdpIdd_IndirectDisplay` 对显示栈重启发出 `PNP_VetoOutstandingOpen`，Windows 标记 `Device required reboot`。应用因桌面拓扑中未出现 PeerSpan 显示器而按安全逻辑释放设备，之后设备显示为 `CM_PROB_PHANTOM`。必须重启后继续虚拟屏、真实串流、输入、剪贴板、恢复及卸载验收。
+尚未通过：活动 RDP 的 `RdpIdd_IndirectDisplay` 对显示栈重启发出 `PNP_VetoOutstandingOpen`，Windows 标记 `Device required reboot`。当时版本因桌面拓扑中未出现 PeerSpan 显示器而释放设备，之后显示为 `CM_PROB_PHANTOM`；当前版本已改为在布局失败时保留设备租约并允许稍后重试，但仍必须重启后继续虚拟屏、真实串流、输入、剪贴板、恢复及卸载验收。
 
 这次 SHA-256 仅用于保留安装链路证据，不作为最终交付包哈希；最终离线包必须由干净 commit 重新生成并以相邻 manifest 为准。

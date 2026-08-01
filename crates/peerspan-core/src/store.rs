@@ -94,6 +94,18 @@ impl PeerSpanCore {
         Ok(())
     }
 
+    pub fn set_streaming_backend_capability(
+        &self,
+        capability: Capability,
+    ) -> Result<(), CoreError> {
+        let mut snapshot = self
+            .snapshot
+            .write()
+            .map_err(|_| CoreError::StatePoisoned)?;
+        snapshot.capabilities.streaming_backend = capability;
+        Ok(())
+    }
+
     pub fn set_input_injection_capability(&self, capability: Capability) -> Result<(), CoreError> {
         let mut snapshot = self
             .snapshot
@@ -352,7 +364,7 @@ pub enum CoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{QualityMode, ScreenEdge};
+    use crate::{QualityMode, ScreenEdge, StreamingBackend};
     use uuid::Uuid;
 
     #[test]
@@ -387,6 +399,31 @@ mod tests {
 
         let reloaded = PeerSpanCore::load(local_device(), &directory).unwrap();
         assert_eq!(reloaded.snapshot().unwrap().preferences, updated);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn legacy_preferences_default_to_sunshine_and_moonlight() {
+        let directory = std::env::temp_dir().join(format!("peerspan-core-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join("preferences.json"),
+            br#"{
+  "launchAtStartup": false,
+  "autoReconnect": true,
+  "clipboardSync": true,
+  "screenEdge": "right",
+  "quality": "balanced",
+  "releaseShortcut": "Ctrl+Alt+Shift+Esc"
+}"#,
+        )
+        .unwrap();
+
+        let core = PeerSpanCore::load(local_device(), &directory).unwrap();
+        assert_eq!(
+            core.snapshot().unwrap().preferences.streaming_backend,
+            StreamingBackend::SunshineMoonlight
+        );
         fs::remove_dir_all(directory).unwrap();
     }
 

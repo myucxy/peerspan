@@ -8,6 +8,7 @@
 mod clipboard;
 mod control;
 mod discovery;
+mod gamestream;
 mod identity;
 mod input;
 mod pairing;
@@ -17,6 +18,7 @@ mod virtual_display;
 
 use control::{ControlRuntime, mark_control_ready, mark_control_unavailable};
 use discovery::{DiscoveryRuntime, mark_discovery_ready, mark_discovery_unavailable};
+use gamestream::GameStreamRuntime;
 use identity::{DeviceIdentity, load_or_create_identity};
 use input::probe_input_capability;
 use pairing::{
@@ -46,6 +48,7 @@ fn refresh_devices(core: State<'_, Arc<PeerSpanCore>>) -> Result<AppSnapshot, St
 fn update_preferences(
     core: State<'_, Arc<PeerSpanCore>>,
     virtual_display: State<'_, VirtualDisplayRuntime>,
+    gamestream: State<'_, Arc<GameStreamRuntime>>,
     preferences: Preferences,
 ) -> Result<AppSnapshot, String> {
     let previous = core.snapshot().map_err(|error| error.to_string())?;
@@ -55,8 +58,16 @@ fn update_preferences(
     if previous.preferences.screen_edge != preferences.screen_edge {
         virtual_display.apply_layout(preferences.screen_edge)?;
     }
+    if previous.preferences.streaming_backend != preferences.streaming_backend
+        && previous.active_session.is_some()
+    {
+        return Err("End the active display session before changing the streaming backend".into());
+    }
     core.update_preferences(preferences)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    probe_video_capability(&core);
+    gamestream.apply_capability(&core);
+    core.snapshot().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -137,6 +148,9 @@ pub fn run() {
             let core = Arc::new(PeerSpanCore::load(local_device.clone(), &data_dir)?);
             probe_video_capability(&core);
             probe_input_capability(&core);
+            let resource_dir = app.path().resource_dir().ok();
+            let gamestream = GameStreamRuntime::discover(&data_dir, resource_dir.as_deref());
+            gamestream.apply_capability(&core);
             app.manage(VirtualDisplayRuntime::new(Arc::clone(&core)));
             let credentials = DeviceCredentials {
                 device: local_device.clone(),
@@ -149,7 +163,7 @@ pub fn run() {
                 }
                 Err(error) => mark_pairing_unavailable(&core, &error),
             }
-            match ControlRuntime::start(credentials, Arc::clone(&core)) {
+            match ControlRuntime::start(credentials, Arc::clone(&core), Arc::clone(&gamestream)) {
                 Ok(runtime) => {
                     mark_control_ready(&core);
                     app.manage(runtime);
@@ -163,6 +177,7 @@ pub fn run() {
                 }
                 Err(error) => mark_discovery_unavailable(&core, &error),
             }
+            app.manage(gamestream);
             app.manage(core);
             Ok(())
         })

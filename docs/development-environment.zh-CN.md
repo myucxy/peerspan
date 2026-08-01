@@ -23,8 +23,12 @@
 | Windows SDK | 10.0.26100.0 | `C:\Program Files (x86)\Windows Kits\10` | Windows 头文件、库与工具 | `Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0'` |
 | Windows Driver Kit | 10.1.26100.6584 | `C:\Program Files (x86)\Windows Kits\10` | IddCx 间接显示驱动开发 | 检查 `Include\10.0.26100.0\um\iddcx\1.2\IddCx.h` 与 `build\10.0.26100.0` |
 | Visual Studio WDK 组件 | 10.0.26100.16 | `D:\Dev\Env\VisualStudio\Community` | 驱动项目模板、平台工具集与 VS 集成 | `vswhere -requires Component.Microsoft.Windows.DriverKit` |
+| Sunshine 便携核心 | v2026.516.143833 | `D:\Dev\Env\PeerSpan\runtimes\sunshine\Sunshine` | 默认主机捕获、硬件编码、GameStream/FEC 与输入 | `sunshine.exe --version` |
+| Moonlight Qt 便携核心 | v6.1.0 | `D:\Dev\Env\PeerSpan\runtimes\moonlight` | 默认接收端硬解、呈现与低延迟输入 | `Moonlight.exe --version` |
 
 Windows DPAPI 由操作系统提供，本机身份私钥保护不需要在 `D:\Dev\Env` 追加系统级工具。Rust 绑定由 `windows-sys` 项目依赖锁定并随 Cargo 还原。
+
+Sunshine/Moonlight 官方 Windows x64 便携包缓存于 `D:\Dev\Env\PeerSpan\downloads`。安装包脚本会校验固定 SHA-256 后再暂存，目标机不需要 MSYS2、Qt、FFmpeg 或单独安装 Sunshine/Moonlight。Moonlight 的 `portable.dat` 不进入按机器安装目录，使设置写入当前用户配置而不是只读的 `Program Files`。对应源码以根目录 Git 子模块固定，许可证和源码获取说明随安装包分发。
 
 TLS 控制通道使用 `rustls`、`rcgen` 和 `x509-parser`。它们都是由 `Cargo.toml` 与 `Cargo.lock` 锁定、通过 Cargo 还原的项目依赖，不需要在 `D:\Dev\Env` 安装额外的 TLS 库或系统工具；其中 `rustls` 使用项目选定的 `ring` 加密提供程序。
 
@@ -116,4 +120,4 @@ npm run build:installer
 pwsh -File native\idd\build.ps1 -Configuration Release -Platform x64
 ```
 
-`npm run build:installer` 使用 Tauri/NSIS 生成 x64 按机器安装包，并把 WebView2 Evergreen 离线安装器、PeerSpan IddCx 测试驱动、匹配的测试证书和防火墙脚本打入同一个 EXE。目标机不需要安装本节中的开发工具。包的内容、测试签名边界和 `192.168.9.26` 验证记录见 [Windows 一体化测试安装包](windows-installer.zh-CN.md)。
+`npm run build:installer` 使用 Tauri/NSIS 生成 x64 按机器安装包，并把 WebView2 Evergreen 离线安装器、Sunshine/Moonlight 便携核心、PeerSpan IddCx 测试驱动、匹配的测试证书、许可证和防火墙脚本打入同一个 EXE。目标机不需要安装本节中的开发工具。包的内容、测试签名边界和 `192.168.9.26` 验证记录见 [Windows 一体化测试安装包](windows-installer.zh-CN.md)。

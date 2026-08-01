@@ -1,13 +1,18 @@
-use crate::{clipboard::ClipboardSync, input::InputInjector, pairing::DeviceCredentials};
+use crate::{
+    clipboard::ClipboardSync,
+    gamestream::{GameStreamLaunch, GameStreamRuntime, generate_pairing_pin},
+    input::InputInjector,
+    pairing::DeviceCredentials,
+};
 use ed25519_dalek::{Signer as _, SigningKey};
 use peerspan_core::{
     Capability, CapabilityState, DeviceStatus, DisplaySession, PeerDevice, PeerSpanCore,
-    QualityMode, SessionDirection, SessionState, parse_release_shortcut,
+    QualityMode, SessionDirection, SessionState, StreamingBackend, parse_release_shortcut,
 };
 use peerspan_media::{MediaError, MediaKeyMaterial, UdpMediaReceiver, UdpMediaSender};
 use peerspan_protocol::{
     ControlMessage, DisplayDecision, DisplayOffer, Heartbeat, Hello, InputEvent, PROTOCOL_VERSION,
-    PointerButton, SessionEnd, StreamReady, VideoCodec,
+    PointerButton, SessionEnd, StreamReady, StreamTransport, VideoCodec,
 };
 use peerspan_video::{
     DecoderConfig, EncoderConfig, NativeVideoReceiver, ReceiverInputEvent, ReceiverPointerButton,
@@ -48,14 +53,15 @@ use uuid::Uuid;
 use x509_parser::{oid_registry::OID_SIG_ED25519, parse_x509_certificate};
 
 pub const CONTROL_PORT: u16 = 37_622;
-const ALPN_PROTOCOL: &[u8] = b"peerspan-control/4";
-const MEDIA_EXPORTER_LABEL: &[u8] = b"EXPORTER-PeerSpan-media-v4";
+const ALPN_PROTOCOL: &[u8] = b"peerspan-control/5";
+const MEDIA_EXPORTER_LABEL: &[u8] = b"EXPORTER-PeerSpan-media-v5";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const SESSION_IO_TIMEOUT: Duration = Duration::from_millis(25);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(500);
 const SESSION_LIVENESS_TIMEOUT: Duration = Duration::from_secs(1);
 const MEDIA_START_TIMEOUT: Duration = Duration::from_secs(8);
+const GAMESTREAM_START_TIMEOUT: Duration = Duration::from_secs(30);
 const FRAME_ACQUIRE_TIMEOUT: Duration = Duration::from_millis(4);
 const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 const MAX_SERVER_WORKERS: usize = 32;
@@ -90,6 +96,7 @@ struct IncomingContext<'a> {
     runtime_shutdown: &'a AtomicBool,
     active_signals: &'a Mutex<HashMap<Uuid, Arc<AtomicBool>>>,
     active_media: &'a ActiveMediaMap,
+    gamestream: Arc<GameStreamRuntime>,
     real_media_workers: bool,
 }
 
@@ -100,6 +107,7 @@ pub struct ControlRuntime {
     shutdown: Arc<AtomicBool>,
     active_signals: Arc<Mutex<HashMap<Uuid, Arc<AtomicBool>>>>,
     active_media: ActiveMediaMap,
+    gamestream: Arc<GameStreamRuntime>,
     listener_worker: Mutex<Option<thread::JoinHandle<()>>>,
     server_workers: Arc<Mutex<Vec<thread::JoinHandle<()>>>>,
     client_workers: Mutex<Vec<thread::JoinHandle<()>>>,
@@ -232,23 +240,37 @@ impl TlsIdentity {
 }
 
 impl ControlRuntime {
-    pub fn start(credentials: DeviceCredentials, core: Arc<PeerSpanCore>) -> Result<Self, String> {
+    pub fn start(
+        credentials: DeviceCredentials,
+        core: Arc<PeerSpanCore>,
+        gamestream: Arc<GameStreamRuntime>,
+    ) -> Result<Self, String> {
         let listener = TcpListener::bind(("0.0.0.0", CONTROL_PORT))
             .map_err(|error| format!("cannot bind TLS control port {CONTROL_PORT}: {error}"))?;
-        Self::start_with_listener(credentials, core, listener)
+        Self::start_with_listener_mode(credentials, core, gamestream, listener, cfg!(not(test)))
     }
 
+    #[cfg(test)]
     fn start_with_listener(
         credentials: DeviceCredentials,
         core: Arc<PeerSpanCore>,
         listener: TcpListener,
     ) -> Result<Self, String> {
-        Self::start_with_listener_mode(credentials, core, listener, cfg!(not(test)))
+        let data_dir =
+            std::env::temp_dir().join(format!("peerspan-gamestream-test-{}", Uuid::new_v4()));
+        Self::start_with_listener_mode(
+            credentials,
+            core,
+            GameStreamRuntime::unavailable_for_tests(data_dir),
+            listener,
+            cfg!(not(test)),
+        )
     }
 
     fn start_with_listener_mode(
         credentials: DeviceCredentials,
         core: Arc<PeerSpanCore>,
+        gamestream: Arc<GameStreamRuntime>,
         listener: TcpListener,
         real_media_workers: bool,
     ) -> Result<Self, String> {
@@ -269,6 +291,7 @@ impl ControlRuntime {
         let listener_credentials = credentials.clone();
         let listener_core = Arc::clone(&core);
         let listener_config = Arc::clone(&server_config);
+        let listener_gamestream = Arc::clone(&gamestream);
         let listener_worker = thread::Builder::new()
             .name("peerspan-control-listener".into())
             .spawn(move || {
@@ -289,6 +312,7 @@ impl ControlRuntime {
                             let worker_credentials = listener_credentials.clone();
                             let worker_core = Arc::clone(&listener_core);
                             let worker_config = Arc::clone(&listener_config);
+                            let worker_gamestream = Arc::clone(&listener_gamestream);
                             let worker = thread::Builder::new()
                                 .name("peerspan-control-peer".into())
                                 .spawn(move || {
@@ -302,6 +326,7 @@ impl ControlRuntime {
                                             runtime_shutdown: &worker_shutdown,
                                             active_signals: &worker_signals,
                                             active_media: &worker_media,
+                                            gamestream: worker_gamestream,
                                             real_media_workers,
                                         },
                                     ) {
@@ -331,6 +356,7 @@ impl ControlRuntime {
             shutdown,
             active_signals,
             active_media,
+            gamestream,
             listener_worker: Mutex::new(Some(listener_worker)),
             server_workers,
             client_workers: Mutex::new(Vec::new()),
@@ -346,16 +372,29 @@ impl ControlRuntime {
             &snapshot.capabilities.virtual_display.state,
             &snapshot.capabilities.virtual_display.detail,
         )?;
-        require_ready(
-            "media pipeline",
-            &snapshot.capabilities.media_pipeline.state,
-            &snapshot.capabilities.media_pipeline.detail,
-        )?;
-        require_ready(
-            "input injection",
-            &snapshot.capabilities.input_injection.state,
-            &snapshot.capabilities.input_injection.detail,
-        )?;
+        let backend = snapshot.preferences.streaming_backend;
+        match backend {
+            StreamingBackend::SunshineMoonlight => {
+                require_ready(
+                    "Sunshine + Moonlight",
+                    &snapshot.capabilities.streaming_backend.state,
+                    &snapshot.capabilities.streaming_backend.detail,
+                )?;
+                self.gamestream.ensure_host()?;
+            }
+            StreamingBackend::Native => {
+                require_ready(
+                    "media pipeline",
+                    &snapshot.capabilities.media_pipeline.state,
+                    &snapshot.capabilities.media_pipeline.detail,
+                )?;
+                require_ready(
+                    "input injection",
+                    &snapshot.capabilities.input_injection.state,
+                    &snapshot.capabilities.input_injection.detail,
+                )?;
+            }
+        }
         if snapshot.active_session.is_some() {
             return Err("Another PeerSpan display session is already active".into());
         }
@@ -380,7 +419,7 @@ impl ControlRuntime {
             frames_per_second: u32::from(session.refresh_hz),
             bitrate: bitrate_for_quality(snapshot.preferences.quality),
         };
-        let input_injector = if self.real_media_workers {
+        let input_injector = if self.real_media_workers && backend == StreamingBackend::Native {
             Some(InputInjector::open()?)
         } else {
             None
@@ -396,6 +435,10 @@ impl ControlRuntime {
                 dpi_y: 96,
                 rotation_degrees: 0,
                 codec: VideoCodec::H264,
+                transport: match backend {
+                    StreamingBackend::SunshineMoonlight => StreamTransport::GameStream,
+                    StreamingBackend::Native => StreamTransport::PeerSpanNative,
+                },
             }),
         )?;
         let decision = match read_control_message(&mut channel)? {
@@ -408,6 +451,9 @@ impl ControlRuntime {
             return Err(decision
                 .reason
                 .unwrap_or_else(|| "The peer declined the display session".into()));
+        }
+        if backend == StreamingBackend::SunshineMoonlight {
+            return self.activate_gamestream_sender(channel, session, decision, &peer.name);
         }
         let media_port = decision
             .media_port
@@ -552,6 +598,66 @@ impl ControlRuntime {
                 return Err(format!("real media sender startup timed out: {error}"));
             }
         }
+        self.client_workers
+            .lock()
+            .map_err(|_| "control worker lock is poisoned")?
+            .push(worker);
+        Ok(session)
+    }
+
+    fn activate_gamestream_sender(
+        &self,
+        channel: ClientTlsStream,
+        session: DisplaySession,
+        decision: DisplayDecision,
+        peer_name: &str,
+    ) -> Result<DisplaySession, String> {
+        if let Some(pin) = decision.game_stream_pairing_pin.as_deref() {
+            self.gamestream.submit_pairing_pin(pin, peer_name)?;
+        }
+        channel
+            .sock
+            .set_read_timeout(Some(SESSION_IO_TIMEOUT))
+            .map_err(|error| error.to_string())?;
+        channel
+            .sock
+            .set_write_timeout(Some(SESSION_IO_TIMEOUT))
+            .map_err(|error| error.to_string())?;
+        self.core
+            .start_display_session(session.clone())
+            .map_err(|error| error.to_string())?;
+        let signal = Arc::new(AtomicBool::new(false));
+        if let Ok(mut signals) = self.active_signals.lock() {
+            signals.insert(session.id, Arc::clone(&signal));
+        } else {
+            let _ = self.core.end_display_session(session.id);
+            return Err("control session lock is poisoned".into());
+        }
+
+        let worker_core = Arc::clone(&self.core);
+        let worker_signals = Arc::clone(&self.active_signals);
+        let worker_shutdown = Arc::clone(&self.shutdown);
+        let session_id = session.id;
+        let worker_signal = Arc::clone(&signal);
+        let worker = thread::Builder::new()
+            .name("peerspan-gamestream-control".into())
+            .spawn(move || {
+                run_client_session(
+                    channel,
+                    &worker_core,
+                    session_id,
+                    &worker_shutdown,
+                    &worker_signal,
+                    None,
+                );
+                worker_signal.store(true, Ordering::Relaxed);
+                remove_session(&worker_signals, session_id);
+            })
+            .map_err(|error| {
+                remove_session(&self.active_signals, session.id);
+                let _ = self.core.end_display_session(session.id);
+                error.to_string()
+            })?;
         self.client_workers
             .lock()
             .map_err(|_| "control worker lock is poisoned")?
@@ -908,6 +1014,7 @@ fn handle_incoming(
         runtime_shutdown,
         active_signals,
         active_media,
+        gamestream,
         real_media_workers,
     } = context;
     configure_stream(&stream, HANDSHAKE_TIMEOUT)?;
@@ -955,9 +1062,23 @@ fn handle_incoming(
                 accepted: false,
                 reason: Some(reason),
                 media_port: None,
+                game_stream_pairing_pin: None,
             }),
         )?;
         return Ok(());
+    }
+
+    if offer.transport == StreamTransport::GameStream {
+        return handle_incoming_gamestream(
+            channel,
+            remote,
+            peer,
+            offer,
+            core,
+            gamestream,
+            runtime_shutdown,
+            active_signals,
+        );
     }
 
     channel
@@ -980,6 +1101,7 @@ fn handle_incoming(
                         accepted: false,
                         reason: Some(format!("could not bind the UDP media receiver: {error}")),
                         media_port: None,
+                        game_stream_pairing_pin: None,
                     }),
                 )?;
                 return Ok(());
@@ -1017,6 +1139,7 @@ fn handle_incoming(
                 accepted: false,
                 reason: Some(error.to_string()),
                 media_port: None,
+                game_stream_pairing_pin: None,
             }),
         )?;
         return Ok(());
@@ -1092,6 +1215,7 @@ fn handle_incoming(
                         accepted: false,
                         reason: Some(format!("could not start the media receiver: {error}")),
                         media_port: None,
+                        game_stream_pairing_pin: None,
                     }),
                 )?;
                 return Ok(());
@@ -1118,6 +1242,7 @@ fn handle_incoming(
                     accepted: false,
                     reason: Some(format!("could not start the real media receiver: {error}")),
                     media_port: None,
+                    game_stream_pairing_pin: None,
                 }),
             )?;
             return Ok(());
@@ -1137,6 +1262,7 @@ fn handle_incoming(
                     accepted: false,
                     reason: Some(format!("real media receiver startup timed out: {error}")),
                     media_port: None,
+                    game_stream_pairing_pin: None,
                 }),
             )?;
             return Ok(());
@@ -1149,6 +1275,7 @@ fn handle_incoming(
             accepted: true,
             reason: None,
             media_port: Some(media_port),
+            game_stream_pairing_pin: None,
         }),
     ) {
         signal.store(true, Ordering::Relaxed);
@@ -1174,6 +1301,164 @@ fn handle_incoming(
     }
     remove_session(active_signals, offer.session_id);
     remove_media(active_media, offer.session_id);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_incoming_gamestream(
+    mut channel: ServerTlsStream,
+    remote: SocketAddr,
+    peer: PeerDevice,
+    offer: DisplayOffer,
+    core: Arc<PeerSpanCore>,
+    gamestream: Arc<GameStreamRuntime>,
+    runtime_shutdown: &AtomicBool,
+    active_signals: &Mutex<HashMap<Uuid, Arc<AtomicBool>>>,
+) -> Result<(), String> {
+    if !gamestream.is_available() {
+        write_control_message(
+            &mut channel,
+            &ControlMessage::DisplayDecision(DisplayDecision {
+                session_id: offer.session_id,
+                accepted: false,
+                reason: Some("Moonlight runtime files are unavailable".into()),
+                media_port: None,
+                game_stream_pairing_pin: None,
+            }),
+        )?;
+        return Ok(());
+    }
+    channel
+        .sock
+        .set_read_timeout(Some(SESSION_IO_TIMEOUT))
+        .map_err(|error| error.to_string())?;
+    channel
+        .sock
+        .set_write_timeout(Some(SESSION_IO_TIMEOUT))
+        .map_err(|error| error.to_string())?;
+    let quality = core
+        .snapshot()
+        .map_err(|error| error.to_string())?
+        .preferences
+        .quality;
+    let session = DisplaySession {
+        id: offer.session_id,
+        peer_id: peer.id,
+        direction: SessionDirection::Receiving,
+        state: SessionState::Negotiating,
+        width_px: offer.width_px,
+        height_px: offer.height_px,
+        refresh_hz: offer.refresh_hz,
+        latency_ms: None,
+    };
+    if let Err(error) = core.start_display_session(session) {
+        write_control_message(
+            &mut channel,
+            &ControlMessage::DisplayDecision(DisplayDecision {
+                session_id: offer.session_id,
+                accepted: false,
+                reason: Some(error.to_string()),
+                media_port: None,
+                game_stream_pairing_pin: None,
+            }),
+        )?;
+        return Ok(());
+    }
+    let signal = Arc::new(AtomicBool::new(false));
+    if let Ok(mut signals) = active_signals.lock() {
+        signals.insert(offer.session_id, Arc::clone(&signal));
+    } else {
+        let _ = core.end_display_session(offer.session_id);
+        return Err("control session lock is poisoned".into());
+    }
+    let pin = (!gamestream.client_is_paired(remote.ip())).then(generate_pairing_pin);
+    let launch = GameStreamLaunch {
+        session_id: offer.session_id,
+        host: remote.ip(),
+        width: offer.width_px,
+        height: offer.height_px,
+        fps: offer.refresh_hz,
+        quality,
+        pin: pin.clone(),
+    };
+    let (startup_sender, startup_receiver) = mpsc::sync_channel(1);
+    let worker_signal = Arc::clone(&signal);
+    let worker_runtime_shutdown = AtomicBool::new(runtime_shutdown.load(Ordering::Relaxed));
+    let worker = thread::Builder::new()
+        .name("peerspan-moonlight-client".into())
+        .spawn(move || {
+            gamestream.run_client(
+                &launch,
+                &worker_runtime_shutdown,
+                &worker_signal,
+                startup_sender,
+            );
+            worker_signal.store(true, Ordering::Relaxed);
+        })
+        .map_err(|error| error.to_string())?;
+
+    if let Err(error) = write_control_message(
+        &mut channel,
+        &ControlMessage::DisplayDecision(DisplayDecision {
+            session_id: offer.session_id,
+            accepted: true,
+            reason: None,
+            media_port: None,
+            game_stream_pairing_pin: pin,
+        }),
+    ) {
+        signal.store(true, Ordering::Relaxed);
+        let _ = worker.join();
+        remove_session(active_signals, offer.session_id);
+        let _ = core.end_display_session(offer.session_id);
+        return Err(error);
+    }
+
+    match startup_receiver.recv_timeout(GAMESTREAM_START_TIMEOUT) {
+        Ok(Ok(())) => {
+            write_control_message(
+                &mut channel,
+                &ControlMessage::StreamReady(StreamReady {
+                    session_id: offer.session_id,
+                }),
+            )?;
+            let _ = core.update_display_session(offer.session_id, SessionState::Streaming, None);
+        }
+        Ok(Err(error)) => {
+            signal.store(true, Ordering::Relaxed);
+            let _ = worker.join();
+            remove_session(active_signals, offer.session_id);
+            let _ = core.end_display_session(offer.session_id);
+            let _ = write_control_message(
+                &mut channel,
+                &ControlMessage::SessionEnd(SessionEnd {
+                    session_id: offer.session_id,
+                    reason: error.clone(),
+                }),
+            );
+            return Err(format!("could not start Moonlight: {error}"));
+        }
+        Err(error) => {
+            signal.store(true, Ordering::Relaxed);
+            let _ = worker.join();
+            remove_session(active_signals, offer.session_id);
+            let _ = core.end_display_session(offer.session_id);
+            return Err(format!("Moonlight startup timed out: {error}"));
+        }
+    }
+    let (_event_sender, event_receiver) = mpsc::channel();
+    run_server_session(
+        channel,
+        &core,
+        offer.session_id,
+        runtime_shutdown,
+        &signal,
+        &event_receiver,
+    );
+    signal.store(true, Ordering::Relaxed);
+    let _ = worker.join();
+    remove_session(active_signals, offer.session_id);
+    let _ = core.end_display_session(offer.session_id);
     Ok(())
 }
 
@@ -1607,6 +1892,20 @@ fn validate_incoming_offer(core: &PeerSpanCore, offer: &DisplayOffer) -> Result<
         return Err("The receiver currently requires H.264".into());
     }
     let snapshot = core.snapshot().map_err(|error| error.to_string())?;
+    let expected_transport = match snapshot.preferences.streaming_backend {
+        StreamingBackend::SunshineMoonlight => StreamTransport::GameStream,
+        StreamingBackend::Native => StreamTransport::PeerSpanNative,
+    };
+    if offer.transport != expected_transport {
+        return Err("The two computers selected different streaming backends".into());
+    }
+    if offer.transport == StreamTransport::GameStream {
+        return require_ready(
+            "Sunshine + Moonlight",
+            &snapshot.capabilities.streaming_backend.state,
+            &snapshot.capabilities.streaming_backend.detail,
+        );
+    }
     require_ready(
         "media pipeline",
         &snapshot.capabilities.media_pipeline.state,
@@ -1897,6 +2196,9 @@ mod tests {
     }
 
     fn ready_sender(core: &PeerSpanCore) {
+        let mut preferences = core.snapshot().unwrap().preferences;
+        preferences.streaming_backend = StreamingBackend::Native;
+        core.update_preferences(preferences).unwrap();
         core.set_virtual_display_capability(Capability::ready("test virtual display"))
             .unwrap();
         core.set_media_pipeline_capability(Capability::ready("test media"))
@@ -1924,9 +2226,7 @@ mod tests {
         let core_a = Arc::new(PeerSpanCore::load(credentials_a.device.clone(), &data_a).unwrap());
         let core_b = Arc::new(PeerSpanCore::load(credentials_b.device.clone(), &data_b).unwrap());
         ready_sender(&core_a);
-        core_b
-            .set_media_pipeline_capability(Capability::ready("test media"))
-            .unwrap();
+        ready_sender(&core_b);
 
         let listener_a = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port_a = listener_a.local_addr().unwrap().port();
@@ -2002,9 +2302,7 @@ mod tests {
         let core_a = Arc::new(PeerSpanCore::load(credentials_a.device.clone(), &data_a).unwrap());
         let core_b = Arc::new(PeerSpanCore::load(credentials_b.device.clone(), &data_b).unwrap());
         ready_sender(&core_a);
-        core_b
-            .set_media_pipeline_capability(Capability::ready("test media"))
-            .unwrap();
+        ready_sender(&core_b);
         let listener_b = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port_b = listener_b.local_addr().unwrap().port();
         let peer_b = peer(&credentials_b, port_b);

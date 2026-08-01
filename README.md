@@ -2,6 +2,8 @@
 
 > 窗口跨屏，算力留在原机。
 
+PeerSpan 自 2026-08-01 起采用 GNU General Public License v3.0 only。Sunshine 与 Moonlight 作为高性能串流核心按各自 GPLv3 条款保留版权与许可证，微软 IddCx 示例派生文件继续单独遵循 Microsoft Public License。详见 [第三方组件与许可证](THIRD_PARTY_NOTICES.md)。
+
 PeerSpan 是一个局域网内的对等桌面扩展和远程应用方案。A、B 两台 Windows 电脑都安装同一个客户端后，可以把对方当作一块可交互的扩展屏；也可以将没有物理显示器的 C 配置为应用节点，从 A/B 的菜单中启动 C 上的软件。窗口的画面和输入跨机器传输，但进程、CPU/GPU 计算、文件访问和应用状态始终保留在窗口原来的电脑上。
 
 ## 产品形态
@@ -67,7 +69,8 @@ Windows 服务本身运行在 Session 0，不能直接承载普通 GUI。安装�
 - DPI 无关的输入坐标映射与版本化控制协议基础；
 - 可无错误构建、打包和测试签名的 IddCx 1.2 单屏 1080p60 驱动，INF 最低目标为 Windows 10 1903 build 18362；
 - 通过 Windows 软件设备 API 启用/撤销 IddCx 虚拟屏、验证设备节点启动状态并在退出时清理的桌面生命周期控制；
-- 由双向认证 TLS 1.3 exporter 派生会话密钥、协商临时端口的加密 UDP 媒体通道，包含分片、会话绑定、重放保护、乱序重组、过期丢帧和有界缓冲；
+- 默认使用 Sunshine + Moonlight 的 GameStream/RTP/FEC、硬件编解码与直接输入，PeerSpan 双向认证 TLS 负责后端协商、PIN 协调、身份授权、心跳、剪贴板和清理；
+- 保留由 TLS 1.3 exporter 派生会话密钥的原生加密 UDP 媒体通道，作为兼容回退和性能 A/B；
 - 基于真实 D3D11 视频设备与 Media Foundation MFT 的低延迟 H.264 硬件编解码，包含 DXGI 纹理输入、异步事件超时、解码格式重协商和实机帧闭环；
 - IddCx 最新帧通过零等待 keyed-mutex 命名纹理交给桌面进程，消费者立即 GPU 复制并在 GPU 上完成 BGRA→NV12，慢消费者只丢帧、不阻塞 DWM；
 - 真实共享纹理硬编发送 worker、同设备硬解纹理→GPU NV12/BGRA 转换→原生 Win32/D3D11 双缓冲呈现窗口；生产接收路径无 CPU 像素读回，首帧成功 `Present` 后才进入串流状态；

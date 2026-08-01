@@ -8,7 +8,7 @@
   ${EndIf}
 
   DetailPrint "Installing the PeerSpan IddCx driver and local-subnet firewall rules..."
-  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\driver\install-dev.ps1" -Configuration Release -Platform x64 -TrustTestCertificate -AcknowledgeSystemChanges -ApplicationPath "$INSTDIR\${MAINBINARYNAME}.exe" -InstallerMode'
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\driver\install-dev.ps1" -Configuration Release -Platform x64 -TrustTestCertificate -AcknowledgeSystemChanges -ApplicationPath "$INSTDIR\${MAINBINARYNAME}.exe" -SunshinePath "$INSTDIR\gamestream\sunshine\Sunshine\sunshine.exe" -InstallerMode'
   Pop $0
   Pop $1
   ${If} $0 != 0

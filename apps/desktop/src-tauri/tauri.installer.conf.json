@@ -11,7 +11,12 @@
       "../../../target/installer-resources/driver/x64/Release/PeerSpanIdd/PeerSpanIdd.inf": "driver/x64/Release/PeerSpanIdd/PeerSpanIdd.inf",
       "../../../target/installer-resources/driver/x64/Release/PeerSpanIdd/peerspanidd.cat": "driver/x64/Release/PeerSpanIdd/peerspanidd.cat",
       "../../../target/installer-resources/driver/x64/Release/PeerSpanIdd/PeerSpanIdd.dll": "driver/x64/Release/PeerSpanIdd/PeerSpanIdd.dll",
-      "../../../target/installer-resources/driver/manifest.json": "driver/manifest.json"
+      "../../../target/installer-resources/driver/manifest.json": "driver/manifest.json",
+      "../../../target/installer-resources/gamestream/sunshine": "gamestream/sunshine",
+      "../../../target/installer-resources/gamestream/moonlight": "gamestream/moonlight",
+      "../../../target/installer-resources/gamestream/licenses": "licenses",
+      "../../../target/installer-resources/gamestream/manifest.json": "gamestream/manifest.json",
+      "../../../target/installer-resources/gamestream/SOURCE_CODE.zh-CN.md": "SOURCE_CODE.zh-CN.md"
     },
     "windows": {
       "webviewInstallMode": {

@@ -14,6 +14,7 @@ peerspan/
 │  ├─ peerspan-protocol/    # 版本化的跨机控制消息
 │  └─ peerspan-video/       # D3D11 与 Media Foundation 硬件视频管线
 ├─ native/                  # IddCx、D3D11 和输入等 Windows 原生模块
+├─ third_party/             # 固定 Sunshine 与 Moonlight Qt 完整对应源码
 └─ docs/                    # 需求、架构、环境和验证记录
 ```
 
@@ -29,11 +30,13 @@ peerspan/
 
 已实现桌面 UI、Web 设计预览、Tauri 命令桥、本机身份与可信设备持久化、偏好持久化、协议基础类型、配对码保护、TLS 控制通道和 DPI 归一化坐标规则。
 
-局域网发现使用 `_peerspan._tcp.local.` mDNS 服务，桌面端每 2 秒刷新一次协议 v4 兼容节点。mDNS 的主服务端口为 TLS 控制端口 `37622`，TXT 记录另外发布配对端口 `37621`。配对引导使用 120 秒有效的六位代码和 SPAKE2 协商共享秘密，以 XChaCha20-Poly1305 保护身份交换，并用 Ed25519 签名验证持久设备身份；单次配对邀请最多允许 5 次尝试。发现测试和本机双端配对测试均已通过。
+局域网发现使用 `_peerspan._tcp.local.` mDNS 服务，桌面端每 2 秒刷新一次协议 v5 兼容节点。mDNS 的主服务端口为 TLS 控制端口 `37622`，TXT 记录另外发布配对端口 `37621`。配对引导使用 120 秒有效的六位代码和 SPAKE2 协商共享秘密，以 XChaCha20-Poly1305 保护身份交换，并用 Ed25519 签名验证持久设备身份；单次配对邀请最多允许 5 次尝试。发现测试和本机双端配对测试均已通过。
 
-长期控制通道仅启用 TLS 1.3，ALPN 为 `peerspan-control/4`。客户端和服务端都使用本机长期 Ed25519 身份签发的自签名证书，并按配对时保存的 Ed25519 公钥固定证书 SPKI；服务端在每次握手时读取最新可信设备列表，因此未配对或已撤销的客户端会在 TLS 握手阶段被拒绝。TLS 建立后，协议 Hello 还会再次核对协议版本、设备 UUID、指纹和证书公钥，防止发现记录或应用层身份与证书错配。
+长期控制通道仅启用 TLS 1.3，ALPN 为 `peerspan-control/5`。客户端和服务端都使用本机长期 Ed25519 身份签发的自签名证书，并按配对时保存的 Ed25519 公钥固定证书 SPKI；服务端在每次握手时读取最新可信设备列表，因此未配对或已撤销的客户端会在 TLS 握手阶段被拒绝。TLS 建立后，协议 Hello 还会再次核对协议版本、设备 UUID、指纹和证书公钥，防止发现记录或应用层身份与证书错配。
 
-当前控制会话支持 Display Offer/Decision、媒体端口协商、500 ms 心跳、往返延迟统计、首帧 Stream Ready、输入、剪贴板、主动 Session End 和双端清理。核心层只允许一个活动显示会话并限制状态合法迁移。已认证的显示会话保持 `Negotiating`，接收端只有在真实硬解帧到达 D3D11 `Present` 后才发送 Stream Ready，双方随后进入 `Streaming`。
+当前 v5 控制会话支持 Display Offer/Decision、串流后端协商、500 ms 心跳、往返延迟统计、Stream Ready、剪贴板、主动 Session End 和双端清理。核心层只允许一个活动显示会话并限制状态合法迁移。默认后端下，发送端启动 Sunshine 并绑定 PeerSpan 虚拟显示器，接收端启动 Moonlight；Moonlight 的四位 PIN 由已认证 TLS 会话传回发送端，再提交给 Sunshine 本机 HTTPS API。Moonlight 硬解窗口稳定启动后发送 Stream Ready，双方进入 `Streaming`。GameStream 媒体与输入直接走 Sunshine/Moonlight，不重复封装到 PeerSpan UDP。
+
+设置中可切换 `PeerSpan Native` 回退。该路径继续使用以下 `peerspan-media`/`peerspan-video` 实现，既用于不具备外部核心的兼容场景，也用于性能 A/B 与回归定位。
 
 `peerspan-media` 建立编码视频访问单元的数据报边界：单个 UDP 数据报不超过 1200 字节，以 ChaCha20-Poly1305 认证加密并绑定会话 UUID、包序号、帧号、分片序号和时间戳；接收端提供 128 包重放窗口、乱序重组、8 MiB 单帧上限、最多 4 个在途帧和 80 ms 过期丢弃。Windows UDP 套接字显式申请 4 MiB 收发缓冲。双方从已认证 TLS 1.3 连接以会话 UUID 为上下文导出 36 字节密钥材料；生产 worker 已把真实共享纹理硬编访问单元送入该通道，并在接收端完成重组、硬解和呈现。
 
