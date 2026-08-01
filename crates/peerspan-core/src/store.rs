@@ -303,9 +303,9 @@ fn persist_trusted_devices(path: &Path, devices: &[PeerDevice]) -> Result<(), Co
 }
 
 fn validate_preferences(preferences: &Preferences) -> Result<(), CoreError> {
-    if preferences.release_shortcut.trim().is_empty() {
+    if crate::parse_release_shortcut(&preferences.release_shortcut).is_none() {
         return Err(CoreError::Validation(
-            "release shortcut cannot be empty".into(),
+            "release shortcut must contain at least two modifiers and one supported key".into(),
         ));
     }
     Ok(())
@@ -355,6 +355,15 @@ mod tests {
     use crate::{QualityMode, ScreenEdge};
     use uuid::Uuid;
 
+    #[test]
+    fn release_shortcut_parser_accepts_safe_combinations() {
+        let shortcut = crate::parse_release_shortcut("Ctrl+Alt+Shift+Esc").unwrap();
+        assert!(shortcut.control && shortcut.alt && shortcut.shift);
+        assert_eq!(shortcut.virtual_key, 0x1b);
+        assert!(crate::parse_release_shortcut("Ctrl+A").is_none());
+        assert!(crate::parse_release_shortcut("Ctrl+Alt+Unknown").is_none());
+    }
+
     fn local_device() -> LocalDevice {
         LocalDevice {
             id: Uuid::nil(),
@@ -398,7 +407,7 @@ mod tests {
             addresses: vec!["192.168.1.20".into()],
             control_port: 37_622,
             pairing_port: 37_621,
-            protocol_version: 3,
+            protocol_version: 4,
         };
         core.trust_device(device.clone()).unwrap();
 
@@ -428,7 +437,7 @@ mod tests {
             addresses: vec!["192.168.1.20".into()],
             control_port: 37_622,
             pairing_port: 37_621,
-            protocol_version: 3,
+            protocol_version: 4,
         };
         core.trust_device(device.clone()).unwrap();
 
@@ -473,7 +482,7 @@ mod tests {
             addresses: Vec::new(),
             control_port: 37_622,
             pairing_port: 37_621,
-            protocol_version: 3,
+            protocol_version: 4,
         })
         .unwrap();
         core.start_display_session(session.clone()).unwrap();

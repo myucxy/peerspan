@@ -1,15 +1,19 @@
 use crate::{
-    DecodedNv12Frame, DecoderConfig, EncodedAccessUnit, EncoderConfig, TransformCapability,
-    VideoCapability, VideoError,
+    DecodedNv12Frame, DecoderConfig, EncodedAccessUnit, EncoderConfig, ReceiverInputEvent,
+    ReceiverPointerButton, ReceiverReleaseShortcut, TransformCapability, VideoCapability,
+    VideoError,
 };
 use std::{
+    collections::VecDeque,
     mem::ManuallyDrop,
-    ptr, slice, thread,
+    ptr, slice,
+    sync::OnceLock,
+    thread,
     time::{Duration, Instant},
 };
 use windows::{
     Win32::{
-        Foundation::{HMODULE, RPC_E_CHANGED_MODE},
+        Foundation::{HINSTANCE, HMODULE, HWND, LPARAM, LRESULT, RECT, RPC_E_CHANGED_MODE, WPARAM},
         Graphics::{
             Direct3D::{
                 D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_11_0,
@@ -23,9 +27,14 @@ use windows::{
                 ID3D11DeviceContext, ID3D11Texture2D,
             },
             Dxgi::{
-                Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC},
-                DXGI_ERROR_WAIT_TIMEOUT, DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE,
-                IDXGIKeyedMutex,
+                Common::{
+                    DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12,
+                    DXGI_SAMPLE_DESC,
+                },
+                DXGI_ERROR_WAIT_TIMEOUT, DXGI_PRESENT, DXGI_SCALING_STRETCH,
+                DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE, DXGI_SWAP_CHAIN_DESC1,
+                DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice,
+                IDXGIFactory2, IDXGIKeyedMutex, IDXGIOutput, IDXGISwapChain1,
             },
         },
         Media::MediaFoundation::{
@@ -53,8 +62,24 @@ use windows::{
             CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
             CoTaskMemFree, CoUninitialize,
         },
+        System::LibraryLoader::GetModuleHandleW,
+        UI::{
+            Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
+            WindowsAndMessaging::{
+                AdjustWindowRectEx, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
+                CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GWLP_USERDATA,
+                GetClientRect, GetSystemMetrics, GetWindowLongPtrW, IDC_ARROW, LoadCursorW, MSG,
+                PM_REMOVE, PeekMessageW, RegisterClassW, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW,
+                SetWindowLongPtrW, ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WM_CLOSE,
+                WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
+                WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+                WM_NCCREATE, WM_NCDESTROY, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN,
+                WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_CAPTION, WS_MINIMIZEBOX,
+                WS_OVERLAPPED, WS_SYSMENU,
+            },
+        },
     },
-    core::{Error as WindowsError, GUID, Interface, PCWSTR, PWSTR},
+    core::{Error as WindowsError, GUID, Interface, PCWSTR, PWSTR, w},
 };
 
 #[cfg(test)]
@@ -940,6 +965,488 @@ impl Drop for HardwareH264Decoder {
         let _ = unsafe { self.activation.ShutdownObject() };
         let _ = (&self.device, &self.manager);
     }
+}
+
+pub struct NativeVideoReceiver {
+    decoder: HardwareH264Decoder,
+    presenter: NativeD3dPresenter,
+}
+
+impl NativeVideoReceiver {
+    pub fn open(
+        config: DecoderConfig,
+        title: &str,
+        shortcut: ReceiverReleaseShortcut,
+    ) -> Result<Self, VideoError> {
+        validate_decoder_config(config)?;
+        let decoder = HardwareH264Decoder::new(config)?;
+        let presenter = NativeD3dPresenter::open(config.width, config.height, title, shortcut)?;
+        Ok(Self { decoder, presenter })
+    }
+
+    pub fn decode_and_present(
+        &mut self,
+        access_unit: &[u8],
+        timestamp_micros: u64,
+    ) -> Result<bool, VideoError> {
+        self.presenter.pump_events()?;
+        if self.presenter.close_requested() {
+            return Ok(false);
+        }
+        let Some(frame) = self.decoder.decode(access_unit, timestamp_micros)? else {
+            return Ok(false);
+        };
+        self.presenter.present(&frame.bytes)?;
+        Ok(true)
+    }
+
+    pub fn pump_events(&mut self) -> Result<(), VideoError> {
+        self.presenter.pump_events()
+    }
+
+    pub fn take_input_events(&mut self) -> Vec<ReceiverInputEvent> {
+        self.presenter.state.events.drain(..).collect()
+    }
+
+    pub fn close_requested(&self) -> bool {
+        self.presenter.close_requested()
+    }
+}
+
+struct WindowState {
+    events: VecDeque<ReceiverInputEvent>,
+    close_requested: bool,
+    control_down: bool,
+    alt_down: bool,
+    shift_down: bool,
+    windows_down: bool,
+    shortcut: ReceiverReleaseShortcut,
+}
+
+impl WindowState {
+    fn push(&mut self, event: ReceiverInputEvent) {
+        if matches!(event, ReceiverInputEvent::PointerMove { .. })
+            && matches!(
+                self.events.back(),
+                Some(ReceiverInputEvent::PointerMove { .. })
+            )
+        {
+            let _ = self.events.pop_back();
+        }
+        if self.events.len() >= 512 {
+            let _ = self.events.pop_front();
+        }
+        self.events.push_back(event);
+    }
+
+    fn release_all(&mut self) {
+        self.control_down = false;
+        self.alt_down = false;
+        self.shift_down = false;
+        self.windows_down = false;
+        if !matches!(self.events.back(), Some(ReceiverInputEvent::ReleaseAll)) {
+            self.push(ReceiverInputEvent::ReleaseAll);
+        }
+    }
+}
+
+struct NativeD3dPresenter {
+    hwnd: HWND,
+    swap_chain: IDXGISwapChain1,
+    back_buffer: ID3D11Texture2D,
+    context: ID3D11DeviceContext,
+    width: u32,
+    height: u32,
+    bgra: Vec<u8>,
+    state: Box<WindowState>,
+}
+
+struct CreatedWindow(HWND);
+
+impl Drop for CreatedWindow {
+    fn drop(&mut self) {
+        if !self.0.is_invalid() {
+            // SAFETY: this guard owns a window created on the current thread.
+            let _ = unsafe { DestroyWindow(self.0) };
+        }
+    }
+}
+
+impl NativeD3dPresenter {
+    fn open(
+        width: u32,
+        height: u32,
+        title: &str,
+        shortcut: ReceiverReleaseShortcut,
+    ) -> Result<Self, VideoError> {
+        register_receiver_window_class()?;
+        let d3d = create_video_device()?;
+        let dxgi_device: IDXGIDevice = d3d
+            .device
+            .cast()
+            .map_err(|error| VideoError::D3d11(error.to_string()))?;
+        let adapter = unsafe { dxgi_device.GetAdapter() }
+            .map_err(|error| VideoError::D3d11(error.to_string()))?;
+        let factory: IDXGIFactory2 =
+            unsafe { adapter.GetParent() }.map_err(|error| VideoError::D3d11(error.to_string()))?;
+
+        let mut state = Box::new(WindowState {
+            events: VecDeque::new(),
+            close_requested: false,
+            control_down: false,
+            alt_down: false,
+            shift_down: false,
+            windows_down: false,
+            shortcut,
+        });
+        let hwnd = create_receiver_window(width, height, title, state.as_mut())?;
+        let mut window_guard = CreatedWindow(hwnd);
+        let description = DXGI_SWAP_CHAIN_DESC1 {
+            Width: width,
+            Height: height,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            Stereo: false.into(),
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+            BufferCount: 2,
+            Scaling: DXGI_SCALING_STRETCH,
+            SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
+            AlphaMode: DXGI_ALPHA_MODE_IGNORE,
+            Flags: 0,
+        };
+        let swap_chain = unsafe {
+            factory.CreateSwapChainForHwnd(
+                &d3d.device,
+                hwnd,
+                &description,
+                None,
+                None::<&IDXGIOutput>,
+            )
+        }
+        .map_err(|error| VideoError::D3d11(error.to_string()))?;
+        let back_buffer: ID3D11Texture2D = unsafe { swap_chain.GetBuffer(0) }
+            .map_err(|error| VideoError::D3d11(error.to_string()))?;
+        validate_texture(&back_buffer, width, height, DXGI_FORMAT_B8G8R8A8_UNORM)?;
+        // SAFETY: the HWND is complete and remains owned by this presenter.
+        let _ = unsafe { ShowWindow(hwnd, SW_SHOW) };
+        window_guard.0 = HWND::default();
+
+        Ok(Self {
+            hwnd,
+            swap_chain,
+            back_buffer,
+            context: d3d.context,
+            width,
+            height,
+            bgra: vec![0; width as usize * height as usize * 4],
+            state,
+        })
+    }
+
+    fn pump_events(&mut self) -> Result<(), VideoError> {
+        let mut message = MSG::default();
+        // SAFETY: the message buffer is valid and the HWND belongs to this thread.
+        while unsafe { PeekMessageW(&mut message, Some(self.hwnd), 0, 0, PM_REMOVE) }.as_bool() {
+            // SAFETY: PeekMessageW initialized this message.
+            unsafe {
+                let _ = TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+        }
+        Ok(())
+    }
+
+    fn present(&mut self, nv12: &[u8]) -> Result<(), VideoError> {
+        nv12_to_bgra(nv12, self.width, self.height, &mut self.bgra)?;
+        // SAFETY: the destination is the live swap-chain back buffer and the
+        // source contains width*height tightly packed BGRA pixels.
+        unsafe {
+            self.context.UpdateSubresource(
+                &self.back_buffer,
+                0,
+                None,
+                self.bgra.as_ptr().cast(),
+                self.width * 4,
+                (self.bgra.len().min(u32::MAX as usize)) as u32,
+            );
+        }
+        unsafe { self.swap_chain.Present(0, DXGI_PRESENT(0)) }
+            .ok()
+            .map_err(|error| VideoError::D3d11(error.to_string()))
+    }
+
+    fn close_requested(&self) -> bool {
+        self.state.close_requested
+    }
+}
+
+impl Drop for NativeD3dPresenter {
+    fn drop(&mut self) {
+        self.state.release_all();
+        if !self.hwnd.is_invalid() {
+            // SAFETY: this presenter owns the window and drops on its window thread.
+            let _ = unsafe { DestroyWindow(self.hwnd) };
+            self.hwnd = HWND::default();
+        }
+    }
+}
+
+fn register_receiver_window_class() -> Result<(), VideoError> {
+    static REGISTRATION: OnceLock<Result<(), String>> = OnceLock::new();
+    REGISTRATION
+        .get_or_init(|| {
+            let module = unsafe { GetModuleHandleW(None) }.map_err(|error| error.to_string())?;
+            let cursor =
+                unsafe { LoadCursorW(None, IDC_ARROW) }.map_err(|error| error.to_string())?;
+            let class = WNDCLASSW {
+                style: CS_HREDRAW | CS_VREDRAW,
+                lpfnWndProc: Some(receiver_window_proc),
+                hInstance: HINSTANCE(module.0),
+                hCursor: cursor,
+                lpszClassName: w!("PeerSpanReceiverWindow.v1"),
+                ..Default::default()
+            };
+            if unsafe { RegisterClassW(&class) } == 0 {
+                return Err(WindowsError::from_win32().to_string());
+            }
+            Ok(())
+        })
+        .clone()
+        .map_err(|error| VideoError::D3d11(format!("could not register receiver window: {error}")))
+}
+
+fn create_receiver_window(
+    width: u32,
+    height: u32,
+    title: &str,
+    state: &mut WindowState,
+) -> Result<HWND, VideoError> {
+    let source_width = i32::try_from(width)
+        .map_err(|_| VideoError::D3d11("receiver window width is too large".into()))?;
+    let source_height = i32::try_from(height)
+        .map_err(|_| VideoError::D3d11("receiver window height is too large".into()))?;
+    let available_width = (unsafe { GetSystemMetrics(SM_CXSCREEN) } - 80).max(320);
+    let available_height = (unsafe { GetSystemMetrics(SM_CYSCREEN) } - 120).max(180);
+    let scale = (f64::from(available_width) / f64::from(source_width))
+        .min(f64::from(available_height) / f64::from(source_height))
+        .min(1.0);
+    let width = (f64::from(source_width) * scale).round() as i32;
+    let height = (f64::from(source_height) * scale).round() as i32;
+    let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+    let ex_style = WINDOW_EX_STYLE::default();
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: width,
+        bottom: height,
+    };
+    unsafe { AdjustWindowRectEx(&mut rect, style, false, ex_style) }
+        .map_err(|error| VideoError::D3d11(error.to_string()))?;
+    let title: Vec<u16> = title.encode_utf16().chain(Some(0)).collect();
+    let module =
+        unsafe { GetModuleHandleW(None) }.map_err(|error| VideoError::D3d11(error.to_string()))?;
+    unsafe {
+        CreateWindowExW(
+            ex_style,
+            w!("PeerSpanReceiverWindow.v1"),
+            PCWSTR(title.as_ptr()),
+            style,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            rect.right - rect.left,
+            rect.bottom - rect.top,
+            None,
+            None,
+            Some(HINSTANCE(module.0)),
+            Some((state as *mut WindowState).cast()),
+        )
+    }
+    .map_err(|error| VideoError::D3d11(format!("could not create receiver window: {error}")))
+}
+
+unsafe extern "system" fn receiver_window_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    if message == WM_NCCREATE {
+        let creation = lparam.0 as *const CREATESTRUCTW;
+        if creation.is_null() {
+            return LRESULT(0);
+        }
+        // SAFETY: WM_NCCREATE supplies a valid CREATESTRUCTW and lpCreateParams
+        // is the boxed WindowState passed to CreateWindowExW.
+        let state = unsafe { (*creation).lpCreateParams } as *mut WindowState;
+        if state.is_null() {
+            return LRESULT(0);
+        }
+        unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, state as isize) };
+        return LRESULT(1);
+    }
+
+    let state = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut WindowState;
+    if state.is_null() {
+        return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) };
+    }
+    let state = unsafe { &mut *state };
+    match message {
+        WM_CLOSE => {
+            state.close_requested = true;
+            state.release_all();
+            let _ = unsafe { ReleaseCapture() };
+            let _ = unsafe { DestroyWindow(hwnd) };
+            LRESULT(0)
+        }
+        WM_DESTROY => {
+            state.close_requested = true;
+            state.release_all();
+            LRESULT(0)
+        }
+        WM_NCDESTROY => {
+            unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) };
+            LRESULT(0)
+        }
+        WM_KILLFOCUS => {
+            state.release_all();
+            let _ = unsafe { ReleaseCapture() };
+            LRESULT(0)
+        }
+        WM_MOUSEMOVE => {
+            let mut client = RECT::default();
+            if unsafe { GetClientRect(hwnd, &mut client) }.is_ok() {
+                let x = low_i16(lparam.0 as usize) as f32;
+                let y = high_i16(lparam.0 as usize) as f32;
+                let width = (client.right - client.left - 1).max(1) as f32;
+                let height = (client.bottom - client.top - 1).max(1) as f32;
+                state.push(ReceiverInputEvent::PointerMove {
+                    normalized_x: (x / width).clamp(0.0, 1.0),
+                    normalized_y: (y / height).clamp(0.0, 1.0),
+                });
+            }
+            LRESULT(0)
+        }
+        WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN => {
+            unsafe { SetCapture(hwnd) };
+            if let Some(button) = pointer_button(message, wparam) {
+                state.push(ReceiverInputEvent::PointerButton {
+                    button,
+                    pressed: true,
+                });
+            }
+            LRESULT(0)
+        }
+        WM_LBUTTONUP | WM_RBUTTONUP | WM_MBUTTONUP | WM_XBUTTONUP => {
+            if let Some(button) = pointer_button(message, wparam) {
+                state.push(ReceiverInputEvent::PointerButton {
+                    button,
+                    pressed: false,
+                });
+            }
+            let _ = unsafe { ReleaseCapture() };
+            LRESULT(0)
+        }
+        WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
+            let delta = high_i16(wparam.0);
+            state.push(ReceiverInputEvent::Wheel {
+                delta_x: if message == WM_MOUSEHWHEEL { delta } else { 0 },
+                delta_y: if message == WM_MOUSEWHEEL { delta } else { 0 },
+            });
+            LRESULT(0)
+        }
+        WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP => {
+            let pressed = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
+            let virtual_key = wparam.0 as u32;
+            match virtual_key {
+                0x10 => state.shift_down = pressed,
+                0x11 => state.control_down = pressed,
+                0x12 => state.alt_down = pressed,
+                0x5b | 0x5c => state.windows_down = pressed,
+                _ => {}
+            }
+            if pressed
+                && virtual_key == u32::from(state.shortcut.virtual_key)
+                && state.control_down == state.shortcut.control
+                && state.alt_down == state.shortcut.alt
+                && state.shift_down == state.shortcut.shift
+                && state.windows_down == state.shortcut.windows
+            {
+                state.release_all();
+                let _ = unsafe { ReleaseCapture() };
+                return LRESULT(0);
+            }
+            let was_down = (lparam.0 as usize & (1 << 30)) != 0;
+            if !pressed || !was_down {
+                state.push(ReceiverInputEvent::Key {
+                    scan_code: ((lparam.0 as usize >> 16) & 0xff) as u16,
+                    pressed,
+                    extended: (lparam.0 as usize & (1 << 24)) != 0,
+                });
+            }
+            LRESULT(0)
+        }
+        _ => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
+    }
+}
+
+fn pointer_button(message: u32, wparam: WPARAM) -> Option<ReceiverPointerButton> {
+    match message {
+        WM_LBUTTONDOWN | WM_LBUTTONUP => Some(ReceiverPointerButton::Left),
+        WM_RBUTTONDOWN | WM_RBUTTONUP => Some(ReceiverPointerButton::Right),
+        WM_MBUTTONDOWN | WM_MBUTTONUP => Some(ReceiverPointerButton::Middle),
+        WM_XBUTTONDOWN | WM_XBUTTONUP => match (wparam.0 >> 16) & 0xffff {
+            1 => Some(ReceiverPointerButton::Back),
+            2 => Some(ReceiverPointerButton::Forward),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn low_i16(value: usize) -> i16 {
+    (value & 0xffff) as u16 as i16
+}
+
+fn high_i16(value: usize) -> i16 {
+    ((value >> 16) & 0xffff) as u16 as i16
+}
+
+fn nv12_to_bgra(nv12: &[u8], width: u32, height: u32, bgra: &mut [u8]) -> Result<(), VideoError> {
+    let expected_nv12 = nv12_frame_bytes(width, height)?;
+    let expected_bgra = width as usize * height as usize * 4;
+    if nv12.len() < expected_nv12 || bgra.len() != expected_bgra {
+        return Err(VideoError::Codec(format!(
+            "presenter buffer mismatch: NV12 {} (expected {expected_nv12}), BGRA {} (expected {expected_bgra})",
+            nv12.len(),
+            bgra.len()
+        )));
+    }
+    let width = width as usize;
+    let height = height as usize;
+    let y_plane_bytes = width * height;
+    for y in 0..height {
+        let y_row = y * width;
+        let uv_row = y_plane_bytes + (y / 2) * width;
+        for x in 0..width {
+            let luma = i32::from(nv12[y_row + x]).saturating_sub(16);
+            let chroma = uv_row + (x & !1);
+            let u = i32::from(nv12[chroma]) - 128;
+            let v = i32::from(nv12[chroma + 1]) - 128;
+            let c = 298 * luma;
+            let red = ((c + 459 * v + 128) >> 8).clamp(0, 255) as u8;
+            let green = ((c - 55 * u - 136 * v + 128) >> 8).clamp(0, 255) as u8;
+            let blue = ((c + 541 * u + 128) >> 8).clamp(0, 255) as u8;
+            let output = (y_row + x) * 4;
+            bgra[output] = blue;
+            bgra[output + 1] = green;
+            bgra[output + 2] = red;
+            bgra[output + 3] = 255;
+        }
+    }
+    Ok(())
 }
 
 fn validate_encoder_config(config: EncoderConfig) -> Result<(), VideoError> {

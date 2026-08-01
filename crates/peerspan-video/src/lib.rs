@@ -80,6 +80,58 @@ pub struct DecodedNv12Frame {
     pub bytes: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ReceiverInputEvent {
+    PointerMove {
+        normalized_x: f32,
+        normalized_y: f32,
+    },
+    PointerButton {
+        button: ReceiverPointerButton,
+        pressed: bool,
+    },
+    Wheel {
+        delta_x: i16,
+        delta_y: i16,
+    },
+    Key {
+        scan_code: u16,
+        pressed: bool,
+        extended: bool,
+    },
+    ReleaseAll,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReceiverPointerButton {
+    Left,
+    Right,
+    Middle,
+    Back,
+    Forward,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReceiverReleaseShortcut {
+    pub control: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub windows: bool,
+    pub virtual_key: u16,
+}
+
+impl Default for ReceiverReleaseShortcut {
+    fn default() -> Self {
+        Self {
+            control: true,
+            alt: true,
+            shift: true,
+            windows: false,
+            virtual_key: 0x1b,
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum VideoError {
     #[error("Windows Media Foundation video is only available on Windows")]
@@ -137,6 +189,14 @@ pub struct HardwareH264Decoder {
 pub struct SharedIddFrameEncoder {
     #[cfg(windows)]
     inner: windows_impl::SharedIddFrameEncoder,
+}
+
+/// Owns the receiving H.264 decoder and a native D3D11 swap-chain window.
+/// Input is captured only while the window is focused and is returned to the
+/// authenticated control session as normalized events.
+pub struct NativeVideoReceiver {
+    #[cfg(windows)]
+    inner: windows_impl::NativeVideoReceiver,
 }
 
 impl HardwareH264Encoder {
@@ -236,6 +296,81 @@ impl SharedIddFrameEncoder {
     }
 }
 
+impl NativeVideoReceiver {
+    pub fn open(config: DecoderConfig, title: &str) -> Result<Self, VideoError> {
+        Self::open_with_release_shortcut(config, title, ReceiverReleaseShortcut::default())
+    }
+
+    pub fn open_with_release_shortcut(
+        config: DecoderConfig,
+        title: &str,
+        shortcut: ReceiverReleaseShortcut,
+    ) -> Result<Self, VideoError> {
+        #[cfg(windows)]
+        {
+            Ok(Self {
+                inner: windows_impl::NativeVideoReceiver::open(config, title, shortcut)?,
+            })
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (config, title, shortcut);
+            Err(VideoError::UnsupportedPlatform)
+        }
+    }
+
+    /// Decodes one H.264 access unit and presents it. `true` means a decoded
+    /// frame reached `IDXGISwapChain::Present`, which is the streaming gate.
+    pub fn decode_and_present(
+        &mut self,
+        access_unit: &[u8],
+        timestamp_micros: u64,
+    ) -> Result<bool, VideoError> {
+        #[cfg(windows)]
+        {
+            self.inner.decode_and_present(access_unit, timestamp_micros)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (access_unit, timestamp_micros);
+            Err(VideoError::UnsupportedPlatform)
+        }
+    }
+
+    pub fn pump_events(&mut self) -> Result<(), VideoError> {
+        #[cfg(windows)]
+        {
+            self.inner.pump_events()
+        }
+        #[cfg(not(windows))]
+        {
+            Err(VideoError::UnsupportedPlatform)
+        }
+    }
+
+    pub fn take_input_events(&mut self) -> Vec<ReceiverInputEvent> {
+        #[cfg(windows)]
+        {
+            self.inner.take_input_events()
+        }
+        #[cfg(not(windows))]
+        {
+            Vec::new()
+        }
+    }
+
+    pub fn close_requested(&self) -> bool {
+        #[cfg(windows)]
+        {
+            self.inner.close_requested()
+        }
+        #[cfg(not(windows))]
+        {
+            true
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,5 +466,35 @@ mod tests {
     fn keyed_shared_bgra_texture_encodes_without_a_cpu_readback() {
         windows_impl::test_shared_texture_to_h264_round_trip()
             .expect("shared keyed texture should encode through the GPU pipeline");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires a Windows desktop, D3D11 swap chain, and hardware H.264 codecs"]
+    fn native_receiver_presents_a_real_decoded_frame() {
+        let encoder_config = EncoderConfig {
+            width: 320,
+            height: 180,
+            frames_per_second: 30,
+            bitrate: 1_500_000,
+        };
+        let mut nv12 = vec![128_u8; 320 * 180 * 3 / 2];
+        nv12[..320 * 180].fill(64);
+        let mut encoder = HardwareH264Encoder::new(encoder_config).unwrap();
+        let access_unit = encoder.encode_nv12(&nv12, 0).unwrap();
+        let mut receiver = NativeVideoReceiver::open(
+            DecoderConfig {
+                width: 320,
+                height: 180,
+                frames_per_second: 30,
+            },
+            "PeerSpan receiver verification",
+        )
+        .unwrap();
+        assert!(
+            receiver
+                .decode_and_present(&access_unit.bytes, access_unit.timestamp_micros)
+                .unwrap()
+        );
     }
 }

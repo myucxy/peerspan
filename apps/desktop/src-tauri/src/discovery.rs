@@ -166,6 +166,7 @@ mod tests {
 
     #[test]
     fn parses_compatible_peer_advertisement() {
+        let protocol = PROTOCOL_VERSION.to_string();
         let properties = [
             ("id", "12345678-90ab-cdef-1234-567890abcdef"),
             ("name", "Studio PC"),
@@ -175,7 +176,7 @@ mod tests {
                 "public_key",
                 "0707070707070707070707070707070707070707070707070707070707070707",
             ),
-            ("protocol", "3"),
+            ("protocol", protocol.as_str()),
             ("pairing_port", "37621"),
         ];
         let info = ServiceInfo::new(

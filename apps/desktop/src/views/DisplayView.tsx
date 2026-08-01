@@ -16,6 +16,8 @@ const edges: Array<{ value: ScreenEdge; label: string }> = [
   { value: "bottom", label: "下方" },
 ];
 
+const qualityLabels = { clarity: "清晰优先 · 20 Mbps", balanced: "平衡 · 12 Mbps", responsive: "响应优先 · 8 Mbps" } as const;
+
 export function DisplayView({ snapshot, virtualDisplayBusy, onChangePreferences, onSetVirtualDisplay, onEndSession }: DisplayViewProps) {
   const { preferences } = snapshot;
   const updateEdge = (screenEdge: ScreenEdge) => void onChangePreferences({ ...preferences, screenEdge });
@@ -64,7 +66,7 @@ export function DisplayView({ snapshot, virtualDisplayBusy, onChangePreferences,
         <section className="settings-card">
           <div className="card-title-row"><span className="soft-icon"><Sparkles size={18} /></span><div><h3>画面策略</h3><p>连接时自动协商，无需手工匹配缩放。</p></div></div>
           <dl className="detail-list">
-            <div><dt>清晰度</dt><dd>平衡模式</dd></div>
+            <div><dt>清晰度</dt><dd>{qualityLabels[preferences.quality]}</dd></div>
             <div><dt>DPI 感知</dt><dd>Per-Monitor V2</dd></div>
             <div><dt>旋转适配</dt><dd><RotateCw size={14} />自动</dd></div>
           </dl>

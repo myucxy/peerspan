@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub const PROTOCOL_VERSION: u16 = 3;
+pub const PROTOCOL_VERSION: u16 = 4;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
@@ -13,6 +13,7 @@ pub enum ControlMessage {
     PairingDecision(PairingDecision),
     DisplayOffer(DisplayOffer),
     DisplayDecision(DisplayDecision),
+    StreamReady(StreamReady),
     SessionEnd(SessionEnd),
     Input(InputEvent),
     ClipboardText(ClipboardText),
@@ -61,12 +62,17 @@ pub struct DisplayDecision {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StreamReady {
+    pub session_id: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionEnd {
     pub session_id: Uuid,
     pub reason: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VideoCodec {
     H264,
@@ -96,7 +102,7 @@ pub enum InputEvent {
     ReleaseAll,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PointerButton {
     Left,
@@ -171,5 +177,15 @@ mod tests {
 
         assert_eq!(decoded, message);
         assert!(json.contains("49152"));
+    }
+
+    #[test]
+    fn stream_ready_is_bound_to_the_authenticated_session() {
+        let session_id = Uuid::new_v4();
+        let message = ControlMessage::StreamReady(StreamReady { session_id });
+        let json = serde_json::to_string(&message).unwrap();
+        let decoded: ControlMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, message);
+        assert!(json.contains(&session_id.to_string()));
     }
 }

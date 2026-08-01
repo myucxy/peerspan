@@ -34,7 +34,7 @@ pwsh -File native\idd\uninstall-dev.ps1 -Configuration Release -Platform x64 `
 
 生产环境不得信任项目生成的测试证书，必须改用正式签名与安装器。当前开发机尚未安装该驱动，因此本轮只验证了 API 封装、失败路径、生命周期单元测试和驱动构建，未声称实机显示器已验收。
 
-当前工程使用 IddCx 1.4，INF 最低目标为 Windows 11 build 22000。PeerSpan 产品仍计划支持 Windows 10 1903；向 IddCx 1.0/1.2 回移并完成对应实机矩阵之前，不得声称 Windows 10 驱动兼容已完成。
+当前工程已回移到 IddCx 1.2，INF 最低目标为 Windows 10 1903 build 18362，并通过 WDK 10.0.26100 Release x64 构建、InfVerif、Catalog 和测试签名。当前开发机未安装驱动，因此 Windows 10 22H2/LTSC 2021 与 Windows 11 的安装、枚举和长稳兼容仍必须在专用测试机验收后才能形成发布声明。
 
 ## 来源与许可
 

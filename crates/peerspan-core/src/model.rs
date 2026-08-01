@@ -119,6 +119,65 @@ impl Default for Preferences {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReleaseShortcut {
+    pub control: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub windows: bool,
+    pub virtual_key: u16,
+}
+
+pub fn parse_release_shortcut(value: &str) -> Option<ReleaseShortcut> {
+    let mut shortcut = ReleaseShortcut {
+        control: false,
+        alt: false,
+        shift: false,
+        windows: false,
+        virtual_key: 0,
+    };
+    for token in value
+        .split('+')
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+    {
+        match token.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" if !shortcut.control => shortcut.control = true,
+            "alt" if !shortcut.alt => shortcut.alt = true,
+            "shift" if !shortcut.shift => shortcut.shift = true,
+            "win" | "windows" if !shortcut.windows => shortcut.windows = true,
+            key if shortcut.virtual_key == 0 => {
+                shortcut.virtual_key = match key {
+                    "esc" | "escape" => 0x1b,
+                    "tab" => 0x09,
+                    "backspace" => 0x08,
+                    "delete" | "del" => 0x2e,
+                    key if key.len() == 1 && key.as_bytes()[0].is_ascii_alphanumeric() => {
+                        u16::from(key.as_bytes()[0].to_ascii_uppercase())
+                    }
+                    key if key.starts_with('f') => key[1..]
+                        .parse::<u16>()
+                        .ok()
+                        .filter(|number| (1..=12).contains(number))
+                        .map(|number| 0x6f + number)?,
+                    _ => return None,
+                };
+            }
+            _ => return None,
+        }
+    }
+    let modifier_count = [
+        shortcut.control,
+        shortcut.alt,
+        shortcut.shift,
+        shortcut.windows,
+    ]
+    .into_iter()
+    .filter(|enabled| *enabled)
+    .count();
+    (modifier_count >= 2 && shortcut.virtual_key != 0).then_some(shortcut)
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum ScreenEdge {

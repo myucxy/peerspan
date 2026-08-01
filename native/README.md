@@ -4,8 +4,8 @@
 
 模块：
 
-- `idd/`：可构建的 IddCx 1.4 间接显示驱动原型和诊断控制器，提供单屏 1080p60 模式；桌面端已接入软件设备生命周期，交换链通过 keyed-mutex 命名 D3D11 纹理发布最新 BGRA 帧。
-- `crates/peerspan-video`：桌面进程中的共享纹理消费、GPU BGRA→NV12 转换与 Media Foundation 硬件编解码适配。
-- `input/`：认证会话下的输入注入与紧急释放实现。
+- `idd/`：可构建的 IddCx 1.2 间接显示驱动和诊断控制器，INF 最低目标为 Windows 10 1903；桌面端已接入软件设备生命周期，交换链通过 keyed-mutex 命名 D3D11 纹理发布最新 BGRA 帧。
+- `crates/peerspan-video`：桌面进程中的共享纹理消费、GPU BGRA→NV12、Media Foundation 硬件编解码与原生 D3D11 接收窗口。
+- `apps/desktop/src-tauri/src/input.rs`：认证会话下的 `SendInput` 注入、紧急释放和遗留窗口回迁。
 
-在完成驱动安装、签名和实机画面验证前，桌面端必须将对应能力报告为“需安装”或“待实现”，不能用模拟成功状态代替。
+未安装驱动时，桌面端只把虚拟显示器能力报告为“需安装”；已经实机验证的硬件媒体和输入适配器可独立报告就绪。任何情况下都不能用模拟画面或伪造 `Streaming` 状态代替真实首帧呈现。

@@ -631,7 +631,7 @@ void IndirectDeviceContext::InitAdapter()
     AdapterCaps.MaxMonitorsSupported = PEERSPAN_MONITOR_COUNT;
     AdapterCaps.EndPointDiagnostics.Size = sizeof(AdapterCaps.EndPointDiagnostics);
     AdapterCaps.EndPointDiagnostics.GammaSupport = IDDCX_FEATURE_IMPLEMENTATION_NONE;
-    AdapterCaps.EndPointDiagnostics.TransmissionType = IDDCX_TRANSMISSION_TYPE_NETWORK_OTHER;
+    AdapterCaps.EndPointDiagnostics.TransmissionType = IDDCX_TRANSMISSION_TYPE_OTHER;
 
     // Declare your device strings for telemetry (required)
     AdapterCaps.EndPointDiagnostics.pEndPointFriendlyName = L"PeerSpan Virtual Display";

@@ -1,13 +1,17 @@
-use crate::pairing::DeviceCredentials;
+use crate::{clipboard::ClipboardSync, input::InputInjector, pairing::DeviceCredentials};
 use ed25519_dalek::{Signer as _, SigningKey};
 use peerspan_core::{
     Capability, CapabilityState, DeviceStatus, DisplaySession, PeerDevice, PeerSpanCore,
-    SessionDirection, SessionState,
+    QualityMode, SessionDirection, SessionState, parse_release_shortcut,
 };
-use peerspan_media::{MediaKeyMaterial, UdpMediaReceiver, UdpMediaSender};
+use peerspan_media::{MediaError, MediaKeyMaterial, UdpMediaReceiver, UdpMediaSender};
 use peerspan_protocol::{
-    ControlMessage, DisplayDecision, DisplayOffer, Heartbeat, Hello, PROTOCOL_VERSION, SessionEnd,
-    VideoCodec,
+    ControlMessage, DisplayDecision, DisplayOffer, Heartbeat, Hello, InputEvent, PROTOCOL_VERSION,
+    PointerButton, SessionEnd, StreamReady, VideoCodec,
+};
+use peerspan_video::{
+    DecoderConfig, EncoderConfig, NativeVideoReceiver, ReceiverInputEvent, ReceiverPointerButton,
+    ReceiverReleaseShortcut, SharedIddFrameEncoder, VideoError,
 };
 use rcgen::{
     CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, KeyPair,
@@ -35,6 +39,7 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
+        mpsc,
     },
     thread,
     time::{Duration, Instant},
@@ -43,13 +48,16 @@ use uuid::Uuid;
 use x509_parser::{oid_registry::OID_SIG_ED25519, parse_x509_certificate};
 
 pub const CONTROL_PORT: u16 = 37_622;
-const ALPN_PROTOCOL: &[u8] = b"peerspan-control/3";
-const MEDIA_EXPORTER_LABEL: &[u8] = b"EXPORTER-PeerSpan-media-v3";
+const ALPN_PROTOCOL: &[u8] = b"peerspan-control/4";
+const MEDIA_EXPORTER_LABEL: &[u8] = b"EXPORTER-PeerSpan-media-v4";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
-const SESSION_IO_TIMEOUT: Duration = Duration::from_secs(1);
+const SESSION_IO_TIMEOUT: Duration = Duration::from_millis(25);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(500);
-const MAX_FRAME_BYTES: usize = 256 * 1024;
+const SESSION_LIVENESS_TIMEOUT: Duration = Duration::from_secs(1);
+const MEDIA_START_TIMEOUT: Duration = Duration::from_secs(8);
+const FRAME_ACQUIRE_TIMEOUT: Duration = Duration::from_millis(4);
+const MAX_FRAME_BYTES: usize = 1024 * 1024 + 64 * 1024;
 const MAX_SERVER_WORKERS: usize = 32;
 
 type ClientTlsStream = StreamOwned<ClientConnection, TcpStream>;
@@ -59,6 +67,11 @@ type ActiveMediaMap = Arc<Mutex<HashMap<Uuid, Arc<Mutex<ActiveMediaEndpoint>>>>>
 enum ActiveMediaEndpoint {
     Sender(Box<UdpMediaSender>),
     Receiver(Box<UdpMediaReceiver>),
+}
+
+enum ServerSessionEvent {
+    Input(InputEvent),
+    StreamReady,
 }
 
 impl ActiveMediaEndpoint {
@@ -72,11 +85,12 @@ impl ActiveMediaEndpoint {
 
 struct IncomingContext<'a> {
     credentials: &'a DeviceCredentials,
-    core: &'a PeerSpanCore,
+    core: Arc<PeerSpanCore>,
     config: Arc<ServerConfig>,
     runtime_shutdown: &'a AtomicBool,
     active_signals: &'a Mutex<HashMap<Uuid, Arc<AtomicBool>>>,
     active_media: &'a ActiveMediaMap,
+    real_media_workers: bool,
 }
 
 pub struct ControlRuntime {
@@ -89,6 +103,7 @@ pub struct ControlRuntime {
     listener_worker: Mutex<Option<thread::JoinHandle<()>>>,
     server_workers: Arc<Mutex<Vec<thread::JoinHandle<()>>>>,
     client_workers: Mutex<Vec<thread::JoinHandle<()>>>,
+    real_media_workers: bool,
 }
 
 #[derive(Clone)]
@@ -228,6 +243,15 @@ impl ControlRuntime {
         core: Arc<PeerSpanCore>,
         listener: TcpListener,
     ) -> Result<Self, String> {
+        Self::start_with_listener_mode(credentials, core, listener, cfg!(not(test)))
+    }
+
+    fn start_with_listener_mode(
+        credentials: DeviceCredentials,
+        core: Arc<PeerSpanCore>,
+        listener: TcpListener,
+        real_media_workers: bool,
+    ) -> Result<Self, String> {
         listener
             .set_nonblocking(true)
             .map_err(|error| error.to_string())?;
@@ -273,11 +297,12 @@ impl ControlRuntime {
                                         remote,
                                         IncomingContext {
                                             credentials: &worker_credentials,
-                                            core: &worker_core,
+                                            core: worker_core,
                                             config: worker_config,
                                             runtime_shutdown: &worker_shutdown,
                                             active_signals: &worker_signals,
                                             active_media: &worker_media,
+                                            real_media_workers,
                                         },
                                     ) {
                                         #[cfg(test)]
@@ -309,6 +334,7 @@ impl ControlRuntime {
             listener_worker: Mutex::new(Some(listener_worker)),
             server_workers,
             client_workers: Mutex::new(Vec::new()),
+            real_media_workers,
         })
     }
 
@@ -347,6 +373,17 @@ impl ControlRuntime {
             height_px: 1080,
             refresh_hz: 60,
             latency_ms: None,
+        };
+        let encoder_config = EncoderConfig {
+            width: session.width_px,
+            height: session.height_px,
+            frames_per_second: u32::from(session.refresh_hz),
+            bitrate: bitrate_for_quality(snapshot.preferences.quality),
+        };
+        let input_injector = if self.real_media_workers {
+            Some(InputInjector::open()?)
+        } else {
+            None
         };
         write_control_message(
             &mut channel,
@@ -437,11 +474,59 @@ impl ControlRuntime {
         let worker_signals = Arc::clone(&self.active_signals);
         let worker_media = Arc::clone(&self.active_media);
         let worker_shutdown = Arc::clone(&self.shutdown);
+        let worker_media_endpoint = self
+            .active_media
+            .lock()
+            .map_err(|_| "media session lock is poisoned")?
+            .get(&session.id)
+            .cloned()
+            .ok_or_else(|| "media session is not active".to_owned())?;
+        let real_media_workers = self.real_media_workers;
         let session_id = session.id;
+        let (startup_sender, startup_receiver) = mpsc::sync_channel(1);
+        let worker_signal = Arc::clone(&signal);
         let worker = thread::Builder::new()
             .name("peerspan-control-session".into())
             .spawn(move || {
-                run_client_session(channel, &worker_core, session_id, &worker_shutdown, &signal);
+                let media_worker = real_media_workers.then(|| {
+                    let media_shutdown = Arc::clone(&worker_shutdown);
+                    let media_signal = Arc::clone(&worker_signal);
+                    let media_startup_sender = startup_sender.clone();
+                    thread::Builder::new()
+                        .name("peerspan-media-sender".into())
+                        .spawn(move || {
+                            run_media_sender(
+                                worker_media_endpoint,
+                                encoder_config,
+                                &media_shutdown,
+                                &media_signal,
+                                media_startup_sender,
+                            );
+                        })
+                });
+                let media_worker = match media_worker {
+                    Some(Ok(worker)) => Some(worker),
+                    Some(Err(error)) => {
+                        let _ = startup_sender.send(Err(error.to_string()));
+                        None
+                    }
+                    None => {
+                        let _ = startup_sender.send(Ok(()));
+                        None
+                    }
+                };
+                run_client_session(
+                    channel,
+                    &worker_core,
+                    session_id,
+                    &worker_shutdown,
+                    &worker_signal,
+                    input_injector,
+                );
+                worker_signal.store(true, Ordering::Relaxed);
+                if let Some(media_worker) = media_worker {
+                    let _ = media_worker.join();
+                }
                 remove_session(&worker_signals, session_id);
                 remove_media(&worker_media, session_id);
             });
@@ -454,6 +539,19 @@ impl ControlRuntime {
                 return Err(error.to_string());
             }
         };
+        match startup_receiver.recv_timeout(MEDIA_START_TIMEOUT) {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                signal.store(true, Ordering::Relaxed);
+                let _ = worker.join();
+                return Err(format!("could not start the real media sender: {error}"));
+            }
+            Err(error) => {
+                signal.store(true, Ordering::Relaxed);
+                let _ = worker.join();
+                return Err(format!("real media sender startup timed out: {error}"));
+            }
+        }
         self.client_workers
             .lock()
             .map_err(|_| "control worker lock is poisoned")?
@@ -810,6 +908,7 @@ fn handle_incoming(
         runtime_shutdown,
         active_signals,
         active_media,
+        real_media_workers,
     } = context;
     configure_stream(&stream, HANDSHAKE_TIMEOUT)?;
     let connection = ServerConnection::new(config).map_err(|error| error.to_string())?;
@@ -848,7 +947,7 @@ fn handle_incoming(
         }
         _ => return Err("TLS control connection sent an unsupported first request".into()),
     };
-    if let Err(reason) = validate_incoming_offer(core, &offer) {
+    if let Err(reason) = validate_incoming_offer(&core, &offer) {
         write_control_message(
             &mut channel,
             &ControlMessage::DisplayDecision(DisplayDecision {
@@ -934,12 +1033,113 @@ fn handle_incoming(
     }
     match active_media.lock() {
         Ok(mut media) => {
-            media.insert(offer.session_id, media_endpoint);
+            media.insert(offer.session_id, Arc::clone(&media_endpoint));
         }
         Err(_) => {
             remove_session(active_signals, offer.session_id);
             let _ = core.end_display_session(offer.session_id);
             return Err("media session lock is poisoned".into());
+        }
+    }
+    let (input_sender, input_receiver) = mpsc::channel::<ServerSessionEvent>();
+    let (media_startup_sender, media_startup_receiver) = mpsc::sync_channel(1);
+    let media_worker = if real_media_workers {
+        let media_core = Arc::clone(&core);
+        let media_signal = Arc::clone(&signal);
+        let media_title = format!("PeerSpan · {}", peer.name);
+        let decoder_config = DecoderConfig {
+            width: offer.width_px,
+            height: offer.height_px,
+            frames_per_second: u32::from(offer.refresh_hz),
+        };
+        let release_shortcut = core
+            .snapshot()
+            .ok()
+            .and_then(|snapshot| parse_release_shortcut(&snapshot.preferences.release_shortcut))
+            .map(|shortcut| ReceiverReleaseShortcut {
+                control: shortcut.control,
+                alt: shortcut.alt,
+                shift: shortcut.shift,
+                windows: shortcut.windows,
+                virtual_key: shortcut.virtual_key,
+            })
+            .unwrap_or_default();
+        match thread::Builder::new()
+            .name("peerspan-media-receiver".into())
+            .spawn(move || {
+                run_media_receiver(
+                    media_endpoint,
+                    decoder_config,
+                    &media_title,
+                    release_shortcut,
+                    media_core,
+                    offer.session_id,
+                    media_signal,
+                    media_startup_sender,
+                    input_sender,
+                );
+            }) {
+            Ok(worker) => Some(worker),
+            Err(error) => {
+                signal.store(true, Ordering::Relaxed);
+                let _ = core.end_display_session(offer.session_id);
+                remove_session(active_signals, offer.session_id);
+                remove_media(active_media, offer.session_id);
+                write_control_message(
+                    &mut channel,
+                    &ControlMessage::DisplayDecision(DisplayDecision {
+                        session_id: offer.session_id,
+                        accepted: false,
+                        reason: Some(format!("could not start the media receiver: {error}")),
+                        media_port: None,
+                    }),
+                )?;
+                return Ok(());
+            }
+        }
+    } else {
+        let _ = media_startup_sender.send(Ok(()));
+        None
+    };
+    match media_startup_receiver.recv_timeout(MEDIA_START_TIMEOUT) {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            signal.store(true, Ordering::Relaxed);
+            if let Some(worker) = media_worker {
+                let _ = worker.join();
+            }
+            let _ = core.end_display_session(offer.session_id);
+            remove_session(active_signals, offer.session_id);
+            remove_media(active_media, offer.session_id);
+            write_control_message(
+                &mut channel,
+                &ControlMessage::DisplayDecision(DisplayDecision {
+                    session_id: offer.session_id,
+                    accepted: false,
+                    reason: Some(format!("could not start the real media receiver: {error}")),
+                    media_port: None,
+                }),
+            )?;
+            return Ok(());
+        }
+        Err(error) => {
+            signal.store(true, Ordering::Relaxed);
+            if let Some(worker) = media_worker {
+                let _ = worker.join();
+            }
+            let _ = core.end_display_session(offer.session_id);
+            remove_session(active_signals, offer.session_id);
+            remove_media(active_media, offer.session_id);
+            write_control_message(
+                &mut channel,
+                &ControlMessage::DisplayDecision(DisplayDecision {
+                    session_id: offer.session_id,
+                    accepted: false,
+                    reason: Some(format!("real media receiver startup timed out: {error}")),
+                    media_port: None,
+                }),
+            )?;
+            return Ok(());
         }
     }
     if let Err(error) = write_control_message(
@@ -951,12 +1151,27 @@ fn handle_incoming(
             media_port: Some(media_port),
         }),
     ) {
+        signal.store(true, Ordering::Relaxed);
+        if let Some(worker) = media_worker {
+            let _ = worker.join();
+        }
         let _ = core.end_display_session(offer.session_id);
         remove_session(active_signals, offer.session_id);
         remove_media(active_media, offer.session_id);
         return Err(error);
     }
-    run_server_session(channel, core, offer.session_id, runtime_shutdown, &signal);
+    run_server_session(
+        channel,
+        &core,
+        offer.session_id,
+        runtime_shutdown,
+        &signal,
+        &input_receiver,
+    );
+    signal.store(true, Ordering::Relaxed);
+    if let Some(worker) = media_worker {
+        let _ = worker.join();
+    }
     remove_session(active_signals, offer.session_id);
     remove_media(active_media, offer.session_id);
     Ok(())
@@ -968,32 +1183,81 @@ fn run_client_session(
     session_id: Uuid,
     runtime_shutdown: &AtomicBool,
     session_shutdown: &AtomicBool,
+    mut input_injector: Option<InputInjector>,
 ) {
     let started = Instant::now();
     let mut sequence = 0_u64;
+    let mut next_heartbeat = Instant::now();
+    let mut pending_heartbeats = HashMap::new();
+    let mut last_received = Instant::now();
+    let clipboard_enabled = core
+        .snapshot()
+        .map(|snapshot| snapshot.preferences.clipboard_sync)
+        .unwrap_or(false);
+    let mut clipboard = ClipboardSync::new(clipboard_enabled);
+    let mut reader = ControlMessageReader::default();
     while !runtime_shutdown.load(Ordering::Relaxed) && !session_shutdown.load(Ordering::Relaxed) {
-        let sent = Instant::now();
-        let heartbeat = Heartbeat {
-            sequence,
-            monotonic_millis: started.elapsed().as_millis() as u64,
-        };
-        if write_control_message(&mut channel, &ControlMessage::Heartbeat(heartbeat)).is_err() {
+        let now = Instant::now();
+        if now >= next_heartbeat {
+            let heartbeat = Heartbeat {
+                sequence,
+                monotonic_millis: started.elapsed().as_millis() as u64,
+            };
+            if write_control_message(&mut channel, &ControlMessage::Heartbeat(heartbeat)).is_err() {
+                break;
+            }
+            pending_heartbeats.insert(sequence, now);
+            sequence = sequence.wrapping_add(1);
+            next_heartbeat = now + HEARTBEAT_INTERVAL;
+        }
+        if let Some(update) = clipboard.poll_local(now)
+            && write_control_message(&mut channel, &ControlMessage::ClipboardText(update)).is_err()
+        {
             break;
         }
-        match read_control_message(&mut channel) {
-            Ok(ControlMessage::Heartbeat(response)) if response.sequence == sequence => {
-                let latency = sent.elapsed().as_millis().min(u16::MAX as u128) as u16;
-                let _ = core.update_display_session(
-                    session_id,
-                    SessionState::Negotiating,
-                    Some(latency),
-                );
+        match reader.poll(&mut channel) {
+            Ok(Some(ControlMessage::Heartbeat(response))) => {
+                last_received = Instant::now();
+                if let Some(sent) = pending_heartbeats.remove(&response.sequence) {
+                    let latency = sent.elapsed().as_millis().min(u16::MAX as u128) as u16;
+                    update_session_latency(core, session_id, latency);
+                }
             }
-            Ok(ControlMessage::SessionEnd(_)) | Err(_) => break,
-            _ => break,
+            Ok(Some(ControlMessage::StreamReady(ready))) if ready.session_id == session_id => {
+                last_received = Instant::now();
+                let latency = core
+                    .snapshot()
+                    .ok()
+                    .and_then(|snapshot| snapshot.active_session)
+                    .and_then(|session| session.latency_ms);
+                let _ = core.update_display_session(session_id, SessionState::Streaming, latency);
+            }
+            Ok(Some(ControlMessage::Input(event))) => {
+                last_received = Instant::now();
+                let Some(injector) = input_injector.as_mut() else {
+                    break;
+                };
+                if injector.inject(event).is_err() {
+                    break;
+                }
+            }
+            Ok(Some(ControlMessage::ClipboardText(update))) => {
+                last_received = Instant::now();
+                let _ = clipboard.apply_remote(update);
+            }
+            Ok(Some(ControlMessage::SessionEnd(end))) if end.session_id == session_id => break,
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if last_received.elapsed() > SESSION_LIVENESS_TIMEOUT {
+                    break;
+                }
+            }
+            Err(_) => break,
         }
-        sequence = sequence.wrapping_add(1);
-        thread::sleep(HEARTBEAT_INTERVAL);
+    }
+    if let Some(injector) = input_injector.as_mut() {
+        injector.release_all();
+        let _ = injector.recover_windows();
     }
     let _ = write_control_message(
         &mut channel,
@@ -1011,18 +1275,57 @@ fn run_server_session(
     session_id: Uuid,
     runtime_shutdown: &AtomicBool,
     session_shutdown: &AtomicBool,
+    events: &mpsc::Receiver<ServerSessionEvent>,
 ) {
+    let clipboard_enabled = core
+        .snapshot()
+        .map(|snapshot| snapshot.preferences.clipboard_sync)
+        .unwrap_or(false);
+    let mut clipboard = ClipboardSync::new(clipboard_enabled);
+    let mut reader = ControlMessageReader::default();
+    let mut last_received = Instant::now();
     while !runtime_shutdown.load(Ordering::Relaxed) && !session_shutdown.load(Ordering::Relaxed) {
-        match read_control_message(&mut channel) {
-            Ok(ControlMessage::Heartbeat(heartbeat)) => {
+        while let Ok(event) = events.try_recv() {
+            let message = match event {
+                ServerSessionEvent::Input(event) => ControlMessage::Input(event),
+                ServerSessionEvent::StreamReady => {
+                    ControlMessage::StreamReady(StreamReady { session_id })
+                }
+            };
+            if write_control_message(&mut channel, &message).is_err() {
+                session_shutdown.store(true, Ordering::Relaxed);
+                break;
+            }
+        }
+        if session_shutdown.load(Ordering::Relaxed) {
+            break;
+        }
+        if let Some(update) = clipboard.poll_local(Instant::now())
+            && write_control_message(&mut channel, &ControlMessage::ClipboardText(update)).is_err()
+        {
+            break;
+        }
+        match reader.poll(&mut channel) {
+            Ok(Some(ControlMessage::Heartbeat(heartbeat))) => {
+                last_received = Instant::now();
                 if write_control_message(&mut channel, &ControlMessage::Heartbeat(heartbeat))
                     .is_err()
                 {
                     break;
                 }
             }
-            Ok(ControlMessage::SessionEnd(end)) if end.session_id == session_id => break,
-            Err(_) | Ok(_) => break,
+            Ok(Some(ControlMessage::ClipboardText(update))) => {
+                last_received = Instant::now();
+                let _ = clipboard.apply_remote(update);
+            }
+            Ok(Some(ControlMessage::SessionEnd(end))) if end.session_id == session_id => break,
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if last_received.elapsed() > SESSION_LIVENESS_TIMEOUT {
+                    break;
+                }
+            }
+            Err(_) => break,
         }
     }
     let _ = write_control_message(
@@ -1033,6 +1336,250 @@ fn run_server_session(
         }),
     );
     let _ = core.end_display_session(session_id);
+}
+
+#[derive(Default)]
+struct ControlMessageReader {
+    buffer: Vec<u8>,
+}
+
+impl ControlMessageReader {
+    fn poll<R: Read>(&mut self, reader: &mut R) -> Result<Option<ControlMessage>, String> {
+        if let Some(message) = self.take_message()? {
+            return Ok(Some(message));
+        }
+        let mut chunk = [0_u8; 8192];
+        match reader.read(&mut chunk) {
+            Ok(0) => Err("authenticated control channel closed".into()),
+            Ok(read) => {
+                self.buffer.extend_from_slice(&chunk[..read]);
+                self.take_message()
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock
+                        | io::ErrorKind::TimedOut
+                        | io::ErrorKind::Interrupted
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn take_message(&mut self) -> Result<Option<ControlMessage>, String> {
+        if self.buffer.len() < 4 {
+            return Ok(None);
+        }
+        let length =
+            u32::from_be_bytes(self.buffer[..4].try_into().expect("four byte prefix")) as usize;
+        if length == 0 || length > MAX_FRAME_BYTES {
+            return Err("control frame length is outside the allowed range".into());
+        }
+        let total = 4 + length;
+        if self.buffer.len() < total {
+            return Ok(None);
+        }
+        let message = serde_json::from_slice(&self.buffer[4..total])
+            .map_err(|error| format!("invalid control message: {error}"))?;
+        self.buffer.drain(..total);
+        Ok(Some(message))
+    }
+}
+
+fn update_session_latency(core: &PeerSpanCore, session_id: Uuid, latency: u16) {
+    if let Ok(snapshot) = core.snapshot()
+        && let Some(session) = snapshot.active_session
+        && session.id == session_id
+    {
+        let _ = core.update_display_session(session_id, session.state, Some(latency));
+    }
+}
+
+fn run_media_sender(
+    endpoint: Arc<Mutex<ActiveMediaEndpoint>>,
+    config: EncoderConfig,
+    runtime_shutdown: &AtomicBool,
+    session_shutdown: &AtomicBool,
+    startup: mpsc::SyncSender<Result<(), String>>,
+) {
+    let open_deadline = Instant::now() + Duration::from_secs(7);
+    let mut encoder = loop {
+        match SharedIddFrameEncoder::open(config) {
+            Ok(encoder) => break encoder,
+            Err(VideoError::SharedTexture(_)) if Instant::now() < open_deadline => {
+                thread::sleep(Duration::from_millis(100));
+            }
+            Err(error) => {
+                let _ = startup.send(Err(error.to_string()));
+                session_shutdown.store(true, Ordering::Relaxed);
+                return;
+            }
+        }
+    };
+    let _ = startup.send(Ok(()));
+    let started = Instant::now();
+    let mut frame_id = 0_u64;
+    while !runtime_shutdown.load(Ordering::Relaxed) && !session_shutdown.load(Ordering::Relaxed) {
+        let access_unit = match encoder.encode_next(
+            started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64,
+            FRAME_ACQUIRE_TIMEOUT,
+        ) {
+            Ok(Some(access_unit)) => access_unit,
+            Ok(None) => continue,
+            Err(_) => break,
+        };
+        let sent = endpoint
+            .lock()
+            .map_err(|_| ())
+            .and_then(|mut endpoint| match &mut *endpoint {
+                ActiveMediaEndpoint::Sender(sender) => sender
+                    .send_frame(
+                        frame_id,
+                        access_unit.timestamp_micros,
+                        access_unit.keyframe,
+                        &access_unit.bytes,
+                    )
+                    .map(|_| ())
+                    .map_err(|_| ()),
+                ActiveMediaEndpoint::Receiver(_) => Err(()),
+            });
+        if sent.is_err() {
+            break;
+        }
+        frame_id = frame_id.wrapping_add(1);
+    }
+    session_shutdown.store(true, Ordering::Relaxed);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_media_receiver(
+    endpoint: Arc<Mutex<ActiveMediaEndpoint>>,
+    config: DecoderConfig,
+    title: &str,
+    release_shortcut: ReceiverReleaseShortcut,
+    core: Arc<PeerSpanCore>,
+    session_id: Uuid,
+    session_shutdown: Arc<AtomicBool>,
+    startup: mpsc::SyncSender<Result<(), String>>,
+    events: mpsc::Sender<ServerSessionEvent>,
+) {
+    let mut receiver =
+        match NativeVideoReceiver::open_with_release_shortcut(config, title, release_shortcut) {
+            Ok(receiver) => receiver,
+            Err(error) => {
+                let _ = startup.send(Err(error.to_string()));
+                session_shutdown.store(true, Ordering::Relaxed);
+                return;
+            }
+        };
+    let _ = startup.send(Ok(()));
+    let mut first_frame_presented = false;
+    while !session_shutdown.load(Ordering::Relaxed) {
+        if receiver.pump_events().is_err() {
+            break;
+        }
+        forward_receiver_events(&mut receiver, &events);
+        if receiver.close_requested() {
+            break;
+        }
+        let frame = match endpoint.lock() {
+            Ok(mut endpoint) => match &mut *endpoint {
+                ActiveMediaEndpoint::Receiver(media) => media.receive_once(Instant::now()),
+                ActiveMediaEndpoint::Sender(_) => break,
+            },
+            Err(_) => break,
+        };
+        match frame {
+            Ok(Some(frame)) => {
+                match receiver.decode_and_present(&frame.payload, frame.timestamp_micros) {
+                    Ok(true) if !first_frame_presented => {
+                        first_frame_presented = true;
+                        if core
+                            .update_display_session(session_id, SessionState::Streaming, None)
+                            .is_err()
+                        {
+                            break;
+                        }
+                        if events.send(ServerSessionEvent::StreamReady).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(_) => break,
+                }
+            }
+            Ok(None) => {}
+            Err(MediaError::Io(error))
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock
+                        | io::ErrorKind::TimedOut
+                        | io::ErrorKind::Interrupted
+                ) => {}
+            Err(MediaError::Io(_)) => break,
+            Err(_) => {
+                // Auth failures, replays and stale datagrams are bounded and
+                // dropped without tearing down a healthy authenticated session.
+            }
+        }
+        forward_receiver_events(&mut receiver, &events);
+    }
+    let _ = events.send(ServerSessionEvent::Input(InputEvent::ReleaseAll));
+    session_shutdown.store(true, Ordering::Relaxed);
+}
+
+fn forward_receiver_events(
+    receiver: &mut NativeVideoReceiver,
+    sender: &mpsc::Sender<ServerSessionEvent>,
+) {
+    for event in receiver.take_input_events() {
+        let event = match event {
+            ReceiverInputEvent::PointerMove {
+                normalized_x,
+                normalized_y,
+            } => InputEvent::PointerMove {
+                normalized_x,
+                normalized_y,
+            },
+            ReceiverInputEvent::PointerButton { button, pressed } => InputEvent::PointerButton {
+                button: match button {
+                    ReceiverPointerButton::Left => PointerButton::Left,
+                    ReceiverPointerButton::Right => PointerButton::Right,
+                    ReceiverPointerButton::Middle => PointerButton::Middle,
+                    ReceiverPointerButton::Back => PointerButton::Back,
+                    ReceiverPointerButton::Forward => PointerButton::Forward,
+                },
+                pressed,
+            },
+            ReceiverInputEvent::Wheel { delta_x, delta_y } => {
+                InputEvent::Wheel { delta_x, delta_y }
+            }
+            ReceiverInputEvent::Key {
+                scan_code,
+                pressed,
+                extended,
+            } => InputEvent::Key {
+                scan_code,
+                pressed,
+                extended,
+            },
+            ReceiverInputEvent::ReleaseAll => InputEvent::ReleaseAll,
+        };
+        if sender.send(ServerSessionEvent::Input(event)).is_err() {
+            break;
+        }
+    }
+}
+
+fn bitrate_for_quality(quality: QualityMode) -> u32 {
+    match quality {
+        QualityMode::Clarity => 20_000_000,
+        QualityMode::Balanced => 12_000_000,
+        QualityMode::Responsive => 8_000_000,
+    }
 }
 
 fn validate_incoming_offer(core: &PeerSpanCore, offer: &DisplayOffer) -> Result<(), String> {
@@ -1268,6 +1815,42 @@ mod tests {
     use crate::pairing::fingerprint_public_key;
     use ed25519_dalek::SigningKey;
     use std::fs;
+
+    #[test]
+    fn session_control_reader_preserves_fragmented_and_buffered_frames() {
+        struct OneByteReader(std::io::Cursor<Vec<u8>>);
+        impl Read for OneByteReader {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                let length = buffer.len().min(1);
+                self.0.read(&mut buffer[..length])
+            }
+        }
+
+        let first = ControlMessage::Heartbeat(Heartbeat {
+            sequence: 7,
+            monotonic_millis: 11,
+        });
+        let second = ControlMessage::StreamReady(StreamReady {
+            session_id: Uuid::new_v4(),
+        });
+        let mut bytes = Vec::new();
+        write_frame(&mut bytes, &first).unwrap();
+        write_frame(&mut bytes, &second).unwrap();
+        let mut source = OneByteReader(std::io::Cursor::new(bytes));
+        let mut reader = ControlMessageReader::default();
+        let decoded_first = loop {
+            if let Some(message) = reader.poll(&mut source).unwrap() {
+                break message;
+            }
+        };
+        let decoded_second = loop {
+            if let Some(message) = reader.poll(&mut source).unwrap() {
+                break message;
+            }
+        };
+        assert_eq!(decoded_first, first);
+        assert_eq!(decoded_second, second);
+    }
 
     fn credentials(seed: u8, name: &str) -> DeviceCredentials {
         let signing_key = SigningKey::from_bytes(&[seed; 32]);

@@ -1,13 +1,17 @@
+mod clipboard;
 mod control;
 mod discovery;
 mod identity;
+mod input;
 mod pairing;
+mod startup;
 mod video;
 mod virtual_display;
 
 use control::{ControlRuntime, mark_control_ready, mark_control_unavailable};
 use discovery::{DiscoveryRuntime, mark_discovery_ready, mark_discovery_unavailable};
 use identity::{DeviceIdentity, load_or_create_identity};
+use input::probe_input_capability;
 use pairing::{
     DeviceCredentials, PairingOffer, PairingRuntime, fingerprint_public_key, mark_pairing_ready,
     mark_pairing_unavailable,
@@ -34,8 +38,16 @@ fn refresh_devices(core: State<'_, Arc<PeerSpanCore>>) -> Result<AppSnapshot, St
 #[tauri::command]
 fn update_preferences(
     core: State<'_, Arc<PeerSpanCore>>,
+    virtual_display: State<'_, VirtualDisplayRuntime>,
     preferences: Preferences,
 ) -> Result<AppSnapshot, String> {
+    let previous = core.snapshot().map_err(|error| error.to_string())?;
+    if previous.preferences.launch_at_startup != preferences.launch_at_startup {
+        startup::set_launch_at_startup(preferences.launch_at_startup)?;
+    }
+    if previous.preferences.screen_edge != preferences.screen_edge {
+        virtual_display.apply_layout(preferences.screen_edge)?;
+    }
     core.update_preferences(preferences)
         .map_err(|error| error.to_string())
 }
@@ -117,6 +129,7 @@ pub fn run() {
             };
             let core = Arc::new(PeerSpanCore::load(local_device.clone(), &data_dir)?);
             probe_video_capability(&core);
+            probe_input_capability(&core);
             app.manage(VirtualDisplayRuntime::new(Arc::clone(&core)));
             let credentials = DeviceCredentials {
                 device: local_device.clone(),

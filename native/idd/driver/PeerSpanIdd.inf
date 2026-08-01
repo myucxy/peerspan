@@ -13,9 +13,9 @@ CatalogFile=PeerSpanIdd.cat
 DriverVer= ; populated by StampInf during the build
 
 [Manufacturer]
-%ManufacturerName%=Standard,NT$ARCH$.10.0...22000
+%ManufacturerName%=Standard,NT$ARCH$.10.0...18362
 
-[Standard.NT$ARCH$.10.0...22000]
+[Standard.NT$ARCH$.10.0...18362]
 %DeviceName%=PeerSpan_Install, Root\PeerSpanVirtualDisplay
 %DeviceName%=PeerSpan_Install, PeerSpanVirtualDisplay
 

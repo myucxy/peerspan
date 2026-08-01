@@ -1,4 +1,4 @@
-use peerspan_core::{Capability, PeerSpanCore};
+use peerspan_core::{Capability, PeerSpanCore, ScreenEdge};
 use std::sync::{Arc, Mutex};
 
 const INACTIVE_DETAIL: &str = "PeerSpan IddCx virtual display is inactive; install the signed driver and enable it when needed";
@@ -9,6 +9,7 @@ trait DisplayLease: Send {
 
 trait VirtualDisplayBackend: Send + Sync {
     fn activate(&self) -> Result<Box<dyn DisplayLease>, String>;
+    fn position(&self, edge: ScreenEdge) -> Result<(), String>;
 }
 
 pub struct VirtualDisplayRuntime {
@@ -35,17 +36,39 @@ impl VirtualDisplayRuntime {
     }
 
     pub fn start(&self) -> Result<(), String> {
+        let edge = self
+            .core
+            .snapshot()
+            .map_err(|error| error.to_string())?
+            .preferences
+            .screen_edge;
         let mut active = self
             .active
             .lock()
             .map_err(|_| "virtual display state lock is poisoned")?;
         if let Some(lease) = active.as_ref() {
+            if let Err(error) = self.backend.position(edge) {
+                let _ = self
+                    .core
+                    .set_virtual_display_capability(Capability::required(format!(
+                        "PeerSpan virtual display layout could not be applied: {error}"
+                    )));
+                return Err(error);
+            }
             self.mark_ready(lease.instance_id())?;
             return Ok(());
         }
 
         match self.backend.activate() {
             Ok(lease) => {
+                if let Err(error) = self.backend.position(edge) {
+                    let _ = self
+                        .core
+                        .set_virtual_display_capability(Capability::required(format!(
+                            "PeerSpan virtual display layout could not be applied: {error}"
+                        )));
+                    return Err(error);
+                }
                 self.mark_ready(lease.instance_id())?;
                 *active = Some(lease);
                 Ok(())
@@ -60,6 +83,18 @@ impl VirtualDisplayRuntime {
                 Err(error)
             }
         }
+    }
+
+    pub fn apply_layout(&self, edge: ScreenEdge) -> Result<(), String> {
+        if self
+            .active
+            .lock()
+            .map_err(|_| "virtual display state lock is poisoned")?
+            .is_some()
+        {
+            self.backend.position(edge)?;
+        }
+        Ok(())
     }
 
     pub fn stop(&self) -> Result<(), String> {
@@ -98,6 +133,7 @@ impl VirtualDisplayRuntime {
 #[cfg(windows)]
 mod platform {
     use super::{DisplayLease, VirtualDisplayBackend};
+    use peerspan_core::ScreenEdge;
     use std::{
         ffi::c_void,
         ptr,
@@ -116,6 +152,12 @@ mod platform {
                 SWDeviceCapabilitiesRemovable, SWDeviceCapabilitiesSilentInstall, SwDeviceClose,
                 SwDeviceCreate,
             },
+        },
+        Win32::Graphics::Gdi::{
+            CDS_UPDATEREGISTRY, ChangeDisplaySettingsExW, DEVMODEW, DISP_CHANGE_SUCCESSFUL,
+            DISPLAY_DEVICE_ACTIVE, DISPLAY_DEVICE_ATTACHED_TO_DESKTOP,
+            DISPLAY_DEVICE_PRIMARY_DEVICE, DISPLAY_DEVICEW, DM_POSITION, ENUM_CURRENT_SETTINGS,
+            EnumDisplayDevicesW, EnumDisplaySettingsExW,
         },
         core::{HRESULT, PCWSTR},
     };
@@ -273,6 +315,131 @@ mod platform {
                 instance_id,
             }))
         }
+
+        fn position(&self, edge: ScreenEdge) -> Result<(), String> {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                match position_display(edge) {
+                    Ok(()) => return Ok(()),
+                    Err(error) if Instant::now() < deadline => {
+                        let _ = error;
+                        thread::sleep(Duration::from_millis(100));
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+    }
+
+    fn position_display(edge: ScreenEdge) -> Result<(), String> {
+        let mut peerspan = None;
+        let mut primary = None;
+        for index in 0..32 {
+            let mut adapter = DISPLAY_DEVICEW {
+                cb: size_of::<DISPLAY_DEVICEW>() as u32,
+                ..Default::default()
+            };
+            if unsafe { EnumDisplayDevicesW(ptr::null(), index, &mut adapter, 0) } == 0 {
+                break;
+            }
+            if adapter.StateFlags & (DISPLAY_DEVICE_ACTIVE | DISPLAY_DEVICE_ATTACHED_TO_DESKTOP)
+                == 0
+            {
+                continue;
+            }
+            if adapter.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE != 0 {
+                primary = Some(adapter.DeviceName);
+            }
+            let mut matches =
+                contains_peerspan(&adapter.DeviceString) || contains_peerspan(&adapter.DeviceID);
+            for monitor_index in 0..16 {
+                let mut monitor = DISPLAY_DEVICEW {
+                    cb: size_of::<DISPLAY_DEVICEW>() as u32,
+                    ..Default::default()
+                };
+                if unsafe {
+                    EnumDisplayDevicesW(adapter.DeviceName.as_ptr(), monitor_index, &mut monitor, 0)
+                } == 0
+                {
+                    break;
+                }
+                matches |= contains_peerspan(&monitor.DeviceString)
+                    || contains_peerspan(&monitor.DeviceID);
+            }
+            if matches {
+                peerspan = Some(adapter.DeviceName);
+            }
+        }
+        let peerspan = peerspan.ok_or_else(|| {
+            "PeerSpan display has not appeared in the Windows desktop topology".to_owned()
+        })?;
+        let primary =
+            primary.ok_or_else(|| "Windows primary display could not be resolved".to_owned())?;
+        let primary_mode = current_mode(&primary)?;
+        let mut peerspan_mode = current_mode(&peerspan)?;
+        let primary_position = unsafe { primary_mode.Anonymous1.Anonymous2.dmPosition };
+        let (x, y) = match edge {
+            ScreenEdge::Left => (
+                primary_position.x - peerspan_mode.dmPelsWidth as i32,
+                primary_position.y,
+            ),
+            ScreenEdge::Right => (
+                primary_position.x + primary_mode.dmPelsWidth as i32,
+                primary_position.y,
+            ),
+            ScreenEdge::Top => (
+                primary_position.x,
+                primary_position.y - peerspan_mode.dmPelsHeight as i32,
+            ),
+            ScreenEdge::Bottom => (
+                primary_position.x,
+                primary_position.y + primary_mode.dmPelsHeight as i32,
+            ),
+        };
+        peerspan_mode.dmFields |= DM_POSITION;
+        peerspan_mode.Anonymous1.Anonymous2.dmPosition.x = x;
+        peerspan_mode.Anonymous1.Anonymous2.dmPosition.y = y;
+        let result = unsafe {
+            ChangeDisplaySettingsExW(
+                peerspan.as_ptr(),
+                &peerspan_mode,
+                ptr::null_mut(),
+                CDS_UPDATEREGISTRY,
+                ptr::null(),
+            )
+        };
+        if result == DISP_CHANGE_SUCCESSFUL {
+            Ok(())
+        } else {
+            Err(format!(
+                "Windows rejected the PeerSpan display position with status {result}"
+            ))
+        }
+    }
+
+    fn current_mode(device_name: &[u16; 32]) -> Result<DEVMODEW, String> {
+        let mut mode = DEVMODEW {
+            dmSize: size_of::<DEVMODEW>() as u16,
+            ..Default::default()
+        };
+        if unsafe {
+            EnumDisplaySettingsExW(device_name.as_ptr(), ENUM_CURRENT_SETTINGS, &mut mode, 0)
+        } == 0
+        {
+            Err("Windows did not return the current display mode".into())
+        } else {
+            Ok(mode)
+        }
+    }
+
+    fn contains_peerspan(value: &[u16]) -> bool {
+        let end = value
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(value.len());
+        String::from_utf16_lossy(&value[..end])
+            .to_ascii_lowercase()
+            .contains("peerspan")
     }
 
     fn wait_for_creation(context: &CallbackContext) -> Result<CreationResult, String> {
@@ -376,6 +543,7 @@ mod platform {
 #[cfg(not(windows))]
 mod platform {
     use super::{DisplayLease, VirtualDisplayBackend};
+    use peerspan_core::ScreenEdge;
 
     pub(super) fn backend() -> Box<dyn VirtualDisplayBackend> {
         Box::new(UnsupportedBackend)
@@ -385,6 +553,10 @@ mod platform {
 
     impl VirtualDisplayBackend for UnsupportedBackend {
         fn activate(&self) -> Result<Box<dyn DisplayLease>, String> {
+            Err("PeerSpan virtual displays require Windows".into())
+        }
+
+        fn position(&self, _edge: ScreenEdge) -> Result<(), String> {
             Err("PeerSpan virtual displays require Windows".into())
         }
     }
@@ -433,6 +605,10 @@ mod tests {
             Ok(Box::new(FakeLease {
                 drops: Arc::clone(&self.drops),
             }))
+        }
+
+        fn position(&self, _edge: ScreenEdge) -> Result<(), String> {
+            Ok(())
         }
     }
 
@@ -544,7 +720,7 @@ mod tests {
                 addresses: vec![],
                 control_port: 37_622,
                 pairing_port: 37_621,
-                protocol_version: 3,
+                protocol_version: 4,
             })
             .unwrap();
         let session_id = Uuid::new_v4();
