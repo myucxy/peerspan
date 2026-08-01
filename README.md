@@ -32,7 +32,7 @@ Windows 服务本身运行在 Session 0，不能直接承载普通 GUI。安装�
 - **像原生窗口一样无缝跨边缘拖动可行，但工程难度高**。两套 Windows 桌面无法共享同一个原生窗口对象，需要在远端创建代理窗口并同步生命周期。
 - 现有开源项目分别解决了虚拟显示器、低延迟串流、远程应用窗口或跨机键鼠，但尚未发现一个成熟项目完整覆盖 PeerSpan 的 Windows 双向体验。
 
-详细竞品、架构、风险和 MVP 范围见 [可行性分析](docs/feasibility.zh-CN.md)，无屏电脑需求见 [应用节点模式说明](docs/app-node-mode.zh-CN.md)，逐项完成情况见 [需求与实现状态](docs/requirements-status.zh-CN.md)。
+详细竞品、架构、风险和 MVP 范围见 [可行性分析](docs/feasibility.zh-CN.md)，无屏电脑需求见 [应用节点模式说明](docs/app-node-mode.zh-CN.md)，逐项完成情况见 [需求与实现状态](docs/requirements-status.zh-CN.md)，最后的真实驱动与双机矩阵见 [Windows 专用机验收手册](docs/windows-acceptance.zh-CN.md)。
 
 ## 建议的首发范围
 
