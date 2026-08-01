@@ -17,9 +17,12 @@
 | Cargo | 1.97.1 | `D:\Dev\Env\Rust\cargo` | Rust 工作区构建与测试 | `D:\Dev\Env\Rust\cargo\bin\cargo.exe --version` |
 | Edge WebView2 Runtime | 150.0.4078.105 | 系统运行时 | Tauri WebView 渲染 | 查询注册表 `EdgeUpdate\Clients` |
 | Visual Studio Build Tools 2022 | 17.14.37 | `D:\Dev\Env\VisualStudio\BuildTools` | MSVC 链接器与 Windows SDK | `VC\Auxiliary\Build\vcvars64.bat` 后执行 `cl` |
+| Visual Studio Community 2022 | 17.14.37 | `D:\Dev\Env\VisualStudio\Community` | WDK VSIX、驱动工程与 64 位 MSBuild | `vswhere -requires Component.Microsoft.Windows.DriverKit` |
 | MSVC | 19.44.35228 | `D:\Dev\Env\VisualStudio\BuildTools\VC\Tools\MSVC` | Windows x64 原生编译 | 在 VS 开发者终端执行 `cl` |
+| MSVC Spectre 缓解库 | 14.44.35207 x64 | `D:\Dev\Env\VisualStudio\Community\VC\Tools\MSVC\14.44.35207\lib\spectre\x64` | WDK 驱动 Release/Debug 链接 | 检查目录后构建 `native\idd` |
 | Windows SDK | 10.0.26100.0 | `C:\Program Files (x86)\Windows Kits\10` | Windows 头文件、库与工具 | `Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0'` |
-| Windows Driver Kit | 10.1.26100.6584 | `C:\Program Files (x86)\Windows Kits\10` | IddCx 间接显示驱动开发 | 检查 `Include\10.0.26100.0\um\IddCx.h` 与 `build\10.0.26100.0` |
+| Windows Driver Kit | 10.1.26100.6584 | `C:\Program Files (x86)\Windows Kits\10` | IddCx 间接显示驱动开发 | 检查 `Include\10.0.26100.0\um\iddcx\1.4\IddCx.h` 与 `build\10.0.26100.0` |
+| Visual Studio WDK 组件 | 10.0.26100.16 | `D:\Dev\Env\VisualStudio\Community` | 驱动项目模板、平台工具集与 VS 集成 | `vswhere -requires Component.Microsoft.Windows.DriverKit` |
 
 ## Rust 环境变量
 
@@ -50,7 +53,30 @@ commit ef7c3074748ab05726c3a9161d3256118efd76e2
 sample video\IndirectDisplay
 ```
 
-`IddCx.h` 和 WDK MSBuild targets 已安装，但官方 `IddSampleDriver.sln` 在当前自定义 Build Tools 实例上仍报告缺少 `WindowsApplicationForDrivers10.0` 和 `WindowsUserModeDriver10.0` 平台工具集。该问题属于 WDK 与自定义 Visual Studio Build Tools 位置的 MSBuild 集成，修复前不要通过复制工具集文件绕过，也不要将驱动示例已编译误记为完成。
+从 Visual Studio 17.11 起，WDK VSIX 是 Visual Studio Installer 中的独立组件，不会自动附加到仅有命令行 Build Tools 的实例。为此新增了完整 Community 实例，并安装以下组件：
+
+```text
+Microsoft.VisualStudio.Workload.NativeDesktop
+Component.Microsoft.Windows.DriverKit
+Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64.Spectre
+```
+
+安装器保存在：
+
+```text
+D:\Dev\Env\VisualStudio\Installer\vs_community.exe
+D:\Dev\Env\WindowsDriverKit\installer\wdksetup-10.1.26100.6584.exe
+```
+
+验证命令：
+
+```powershell
+$vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+& $vswhere -products "*" -requires Component.Microsoft.Windows.DriverKit -property installationPath
+pwsh -File native\idd\build.ps1 -Configuration Release -Platform x64
+```
+
+微软官方 `video\IndirectDisplay\IddSampleDriver.sln` 已在 x64 Release 下完成无错误、无警告构建、INF 验证、CAT 生成和测试签名。WDK 26100 的 INF 验证 DLL 只有 x64/ARM64 版本，必须使用 `MSBuild\Current\Bin\amd64\MSBuild.exe`；32 位 MSBuild 会报告缺少 `x86\InfVerif.dll`。`native\idd\build.ps1` 已固定这一选择并禁用 MSBuild 节点复用。
 
 若依赖下载直连失败，可只在当前终端临时设置代理，不应提交到项目配置：
 
@@ -74,4 +100,5 @@ cargo test --workspace
 cargo test --workspace -- --ignored
 npm run dev
 npm run build
+pwsh -File native\idd\build.ps1 -Configuration Release -Platform x64
 ```

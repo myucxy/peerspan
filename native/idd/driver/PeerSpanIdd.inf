@@ -1,0 +1,72 @@
+;
+; PeerSpanIdd.inf
+;
+
+[Version]
+PnpLockDown=1
+Signature="$Windows NT$"
+ClassGUID = {4D36E968-E325-11CE-BFC1-08002BE10318}
+Class = Display
+ClassVer = 2.0
+Provider=%ManufacturerName%
+CatalogFile=PeerSpanIdd.cat
+DriverVer= ; populated by StampInf during the build
+
+[Manufacturer]
+%ManufacturerName%=Standard,NT$ARCH$.10.0...22000
+
+[Standard.NT$ARCH$.10.0...22000]
+%DeviceName%=PeerSpan_Install, Root\PeerSpanVirtualDisplay
+%DeviceName%=PeerSpan_Install, PeerSpanVirtualDisplay
+
+[SourceDisksFiles]
+PeerSpanIdd.dll=1
+
+[SourceDisksNames]
+1 = %DiskName%
+
+; =================== UMDF Device ==================================
+
+[PeerSpan_Install.NT]
+Include=WUDFRD.inf
+Needs=WUDFRD.NT
+CopyFiles=UMDriverCopy
+
+[PeerSpan_Install.NT.hw]
+Include=WUDFRD.inf
+Needs=WUDFRD.NT.HW
+AddReg = PeerSpan_HardwareDeviceSettings
+
+[PeerSpan_HardwareDeviceSettings]
+HKR,, "UpperFilters",  %REG_MULTI_SZ%, "IndirectKmd"
+HKR, "WUDF", "DeviceGroupId", %REG_SZ%, "PeerSpan.VirtualDisplay.UMDF"
+
+[PeerSpan_Install.NT.Services]
+Include=WUDFRD.inf
+Needs=WUDFRD.NT.Services
+
+[PeerSpan_Install.NT.Wdf]
+UmdfService=PeerSpanIdd,PeerSpanIdd_Install
+UmdfServiceOrder=PeerSpanIdd
+UmdfKernelModeClientPolicy = AllowKernelModeClients
+
+[PeerSpanIdd_Install]
+UmdfLibraryVersion=$UMDFVERSION$
+ServiceBinary=%12%\UMDF\PeerSpanIdd.dll
+UmdfExtensions = IddCx0102
+
+[DestinationDirs]
+UMDriverCopy=12,UMDF ; copy to drivers\umdf
+
+[UMDriverCopy]
+PeerSpanIdd.dll
+
+; =================== Generic ==================================
+
+[Strings]
+ManufacturerName="PeerSpan Project"
+DiskName = "PeerSpan Virtual Display Driver"
+DeviceName="PeerSpan Virtual Display"
+
+REG_MULTI_SZ  = 0x00010000
+REG_SZ        = 0x00000000

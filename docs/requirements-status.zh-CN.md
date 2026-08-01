@@ -13,8 +13,8 @@
 | 局域网自动发现 | 已完成 | `_peerspan._udp.local.` mDNS 与 2 秒轮询；双本地守护进程实测互相发现 |
 | 安全配对引导 | 已完成 | 六位代码、SPAKE2、XChaCha20-Poly1305、Ed25519 签名身份交换；双端持久化集成测试通过 |
 | DPI/缩放坐标映射 | 已完成 | 归一化内容坐标、边界钳制和不同 DPI 往返测试 |
-| IddCx 1080p60 虚拟显示器 | 进行中 | WDK/IddCx 已安装；待解决 WDK 与自定义 Build Tools 的平台工具集集成并适配官方样例 |
-| D3D11 帧获取和硬件编码 | 未开始 | 已保留 `native/graphics` 架构边界，尚无真实画面链路 |
+| IddCx 1080p60 虚拟显示器 | 进行中 | 官方 IddSample 与 `native/idd` PeerSpan 原型均已无错误构建、INF 验证、CAT 生成和测试签名；单屏 1080p60 模式已固定，待实机安装、生命周期控制和 Windows 10 回移 |
+| D3D11 帧获取和硬件编码 | 进行中 | IddCx 交换链线程已正确获取并释放 D3D11 帧；当前主动丢弃帧，硬件编码和传输尚未接入 |
 | 认证媒体与长期控制通道 | 未开始 | 首次配对已安全实现；长期 TLS 1.3/QUIC 或等价通道待实现 |
 | 远端解码显示与输入回传 | 未开始 | 协议和坐标规则已建立；输入注入、紧急释放与实机验证待实现 |
 | 文本剪贴板 | 未开始 | 待在认证控制通道上实现，首版不传文件和富文本 |
@@ -42,4 +42,5 @@ npm run typecheck
 npm test
 npm run build:web
 npm run build
+pwsh -File native\idd\build.ps1 -Configuration Release -Platform x64
 ```
