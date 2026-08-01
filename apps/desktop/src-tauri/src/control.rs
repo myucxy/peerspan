@@ -57,7 +57,7 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(500);
 const SESSION_LIVENESS_TIMEOUT: Duration = Duration::from_secs(1);
 const MEDIA_START_TIMEOUT: Duration = Duration::from_secs(8);
 const FRAME_ACQUIRE_TIMEOUT: Duration = Duration::from_millis(4);
-const MAX_FRAME_BYTES: usize = 1024 * 1024 + 64 * 1024;
+const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 const MAX_SERVER_WORKERS: usize = 32;
 
 type ClientTlsStream = StreamOwned<ClientConnection, TcpStream>;
@@ -1850,6 +1850,17 @@ mod tests {
         };
         assert_eq!(decoded_first, first);
         assert_eq!(decoded_second, second);
+    }
+
+    #[test]
+    fn maximum_clipboard_text_fits_the_bounded_control_frame_after_json_escaping() {
+        let message = ControlMessage::ClipboardText(peerspan_protocol::ClipboardText {
+            revision: 1,
+            text: "\0".repeat(crate::clipboard::MAX_CLIPBOARD_TEXT_BYTES),
+        });
+        let mut frame = Vec::new();
+        write_frame(&mut frame, &message).unwrap();
+        assert!(frame.len() <= MAX_FRAME_BYTES + 4);
     }
 
     fn credentials(seed: u8, name: &str) -> DeviceCredentials {
