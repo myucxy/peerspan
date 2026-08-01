@@ -5,7 +5,7 @@ import { LocalPairingDialog } from "./components/LocalPairingDialog";
 import { Sidebar } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
 import { useAppSnapshot } from "./hooks/useAppSnapshot";
-import { createPairingOffer, endSession, isDesktopRuntime, pairDevice, requestSession, type PairingOffer } from "./lib/bridge";
+import { createPairingOffer, endSession, isDesktopRuntime, pairDevice, requestSession, startVirtualDisplay, stopVirtualDisplay, type PairingOffer } from "./lib/bridge";
 import type { PeerDevice, ViewKey } from "./types";
 import { DisplayView } from "./views/DisplayView";
 import { HomeView } from "./views/HomeView";
@@ -17,12 +17,15 @@ interface ToastState {
   message: string;
 }
 
+const errorMessage = (reason: unknown) => reason instanceof Error ? reason.message : String(reason);
+
 export default function App() {
   const [activeView, setActiveView] = useState<ViewKey>("home");
   const [pairingDevice, setPairingDevice] = useState<PeerDevice>();
   const [pairingBusy, setPairingBusy] = useState(false);
   const [localPairingOffer, setLocalPairingOffer] = useState<PairingOffer>();
   const [toast, setToast] = useState<ToastState>();
+  const [virtualDisplayBusy, setVirtualDisplayBusy] = useState(false);
   const { snapshot, loading, scanning, error, scan, updatePreferences } = useAppSnapshot();
 
   useEffect(() => {
@@ -46,7 +49,7 @@ export default function App() {
       setActiveView("display");
       setToast({ tone: "success", message: `已与 ${device.name} 建立认证控制会话` });
     } catch (reason) {
-      setToast({ tone: "error", message: String(reason) });
+      setToast({ tone: "error", message: errorMessage(reason) });
       setActiveView("display");
     }
   };
@@ -57,7 +60,22 @@ export default function App() {
       await scan();
       setToast({ tone: "success", message: "屏幕会话已安全结束" });
     } catch (reason) {
-      setToast({ tone: "error", message: String(reason) });
+      setToast({ tone: "error", message: errorMessage(reason) });
+    }
+  };
+
+  const setVirtualDisplay = async (enabled: boolean) => {
+    setVirtualDisplayBusy(true);
+    try {
+      if (enabled) await startVirtualDisplay();
+      else await stopVirtualDisplay();
+      await scan();
+      setToast({ tone: "success", message: enabled ? "PeerSpan 虚拟显示器已启用" : "PeerSpan 虚拟显示器已安全撤销" });
+    } catch (reason) {
+      await scan();
+      setToast({ tone: "error", message: errorMessage(reason) });
+    } finally {
+      setVirtualDisplayBusy(false);
     }
   };
 
@@ -65,7 +83,7 @@ export default function App() {
     try {
       setLocalPairingOffer(await createPairingOffer());
     } catch (reason) {
-      setToast({ tone: "error", message: String(reason) });
+      setToast({ tone: "error", message: errorMessage(reason) });
     }
   };
 
@@ -78,7 +96,7 @@ export default function App() {
       await scan();
       setToast({ tone: "success", message: `已安全配对 ${pairingDevice.name}` });
     } catch (reason) {
-      setToast({ tone: "error", message: String(reason) });
+      setToast({ tone: "error", message: errorMessage(reason) });
     } finally {
       setPairingBusy(false);
     }
@@ -102,7 +120,7 @@ export default function App() {
         <Sidebar active={activeView} localDevice={snapshot.localDevice} onNavigate={setActiveView} />
         <main className="content-area">
           {activeView === "home" && <HomeView snapshot={snapshot} scanning={scanning} preview={!isDesktopRuntime()} onScan={() => void scan()} onSelectDevice={(device) => void selectDevice(device)} onOpenDisplay={() => setActiveView("display")} onCreatePairingOffer={() => void showLocalPairingOffer()} />}
-          {activeView === "display" && <DisplayView snapshot={snapshot} onChangePreferences={updatePreferences} onEndSession={stopSession} />}
+          {activeView === "display" && <DisplayView snapshot={snapshot} virtualDisplayBusy={virtualDisplayBusy} onChangePreferences={updatePreferences} onSetVirtualDisplay={setVirtualDisplay} onEndSession={stopSession} />}
           {activeView === "nodes" && <NodesView />}
           {activeView === "settings" && <SettingsView snapshot={snapshot} onChangePreferences={updatePreferences} />}
         </main>

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { getAppSnapshot, isDesktopRuntime, savePreferences } from "./bridge";
+import { getAppSnapshot, isDesktopRuntime, savePreferences, startVirtualDisplay, stopVirtualDisplay } from "./bridge";
 
 describe("web design-preview bridge", () => {
   beforeEach(() => {
@@ -17,5 +17,10 @@ describe("web design-preview bridge", () => {
 
     expect(updated.preferences.screenEdge).toBe("left");
     expect((await getAppSnapshot()).preferences.screenEdge).toBe("left");
+  });
+
+  it("refuses native virtual-display mutations in the design preview", async () => {
+    await expect(startVirtualDisplay()).rejects.toThrow("设计预览不能创建 Windows 虚拟显示器");
+    await expect(stopVirtualDisplay()).rejects.toThrow("设计预览没有可撤销的 Windows 虚拟显示器");
   });
 });

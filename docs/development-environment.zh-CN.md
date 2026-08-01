@@ -28,6 +28,8 @@ Windows DPAPI 由操作系统提供，本机身份私钥保护不需要在 `D:\D
 
 TLS 控制通道使用 `rustls`、`rcgen` 和 `x509-parser`。它们都是由 `Cargo.toml` 与 `Cargo.lock` 锁定、通过 Cargo 还原的项目依赖，不需要在 `D:\Dev\Env` 安装额外的 TLS 库或系统工具；其中 `rustls` 使用项目选定的 `ring` 加密提供程序。
 
+虚拟显示器桌面生命周期使用 Windows 自带的 Software Device 与 Configuration Manager API，Rust 绑定由现有 `windows-sys` 依赖提供，不需要向 `D:\Dev\Env` 添加工具。驱动开发安装脚本会修改系统驱动仓库，选择信任测试证书时还会修改本机证书库，因此不属于常规构建步骤，自动验证不得执行。
+
 ## Rust 环境变量
 
 当前 Rust 使用项目外的固定目录：

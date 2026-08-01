@@ -111,6 +111,20 @@ export async function endSession(sessionId: string): Promise<void> {
   throw new Error("设计预览没有可结束的真实会话");
 }
 
+export async function startVirtualDisplay(): Promise<AppSnapshot> {
+  if (isDesktopRuntime()) {
+    return invoke<AppSnapshot>("start_virtual_display");
+  }
+  throw new Error("设计预览不能创建 Windows 虚拟显示器");
+}
+
+export async function stopVirtualDisplay(): Promise<AppSnapshot> {
+  if (isDesktopRuntime()) {
+    return invoke<AppSnapshot>("stop_virtual_display");
+  }
+  throw new Error("设计预览没有可撤销的 Windows 虚拟显示器");
+}
+
 export async function createPairingOffer(): Promise<PairingOffer> {
   if (isDesktopRuntime()) {
     return invoke<PairingOffer>("create_pairing_offer");

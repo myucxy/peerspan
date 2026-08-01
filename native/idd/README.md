@@ -14,6 +14,24 @@ pwsh -File native\idd\build.ps1 -Configuration Release -Platform x64
 
 构建完成后，测试签名的 DLL、INF、CAT 和控制器位于 `native\idd\x64\Release`。这些文件是开发产物，不提交到 Git。安装测试签名驱动会改变系统驱动与证书状态，因此构建脚本不会自动安装。
 
+## 开发安装与生命周期
+
+桌面后端直接使用 Windows `SwDeviceCreate` 创建软件设备，不依赖或启动外部控制器进程。只有回调成功且 Configuration Manager 报告设备节点进入 `DN_STARTED` 后，虚拟显示器能力才会标记为就绪；撤销、应用退出或创建失败时会关闭软件设备句柄。`PeerSpanIddController.exe` 仅保留为独立诊断工具。
+
+安装和卸载脚本默认拒绝执行，必须在管理员 PowerShell 中显式确认系统变更。开发测试证书只应在专用测试机使用；普通开发构建和自动验证不得运行这些命令：
+
+```powershell
+# 先阅读脚本。以下命令会修改本机驱动仓库和证书信任。
+pwsh -File native\idd\install-dev.ps1 -Configuration Release -Platform x64 `
+  -TrustTestCertificate -AcknowledgeSystemChanges
+
+# 先退出 PeerSpan，再移除开发驱动；证书移除仍需显式开关。
+pwsh -File native\idd\uninstall-dev.ps1 -Configuration Release -Platform x64 `
+  -RemoveTestCertificate -AcknowledgeSystemChanges
+```
+
+生产环境不得信任项目生成的测试证书，必须改用正式签名与安装器。当前开发机尚未安装该驱动，因此本轮只验证了 API 封装、失败路径、生命周期单元测试和驱动构建，未声称实机显示器已验收。
+
 当前工程使用 IddCx 1.4，INF 最低目标为 Windows 11 build 22000。PeerSpan 产品仍计划支持 Windows 10 1903；向 IddCx 1.0/1.2 回移并完成对应实机矩阵之前，不得声称 Windows 10 驱动兼容已完成。
 
 ## 来源与许可

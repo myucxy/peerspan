@@ -1,9 +1,11 @@
-import { Check, ChevronDown, CircleStop, Info, Keyboard, Monitor, MousePointer2, RotateCw, Sparkles } from "lucide-react";
+import { Check, ChevronDown, CircleStop, Info, Keyboard, LoaderCircle, Monitor, MonitorOff, MonitorUp, MousePointer2, RotateCw, Sparkles } from "lucide-react";
 import type { AppSnapshot, Preferences, ScreenEdge } from "../types";
 
 interface DisplayViewProps {
   snapshot: AppSnapshot;
+  virtualDisplayBusy: boolean;
   onChangePreferences: (preferences: Preferences) => Promise<void>;
+  onSetVirtualDisplay: (enabled: boolean) => Promise<void>;
   onEndSession: (sessionId: string) => Promise<void>;
 }
 
@@ -14,14 +16,17 @@ const edges: Array<{ value: ScreenEdge; label: string }> = [
   { value: "bottom", label: "下方" },
 ];
 
-export function DisplayView({ snapshot, onChangePreferences, onEndSession }: DisplayViewProps) {
+export function DisplayView({ snapshot, virtualDisplayBusy, onChangePreferences, onSetVirtualDisplay, onEndSession }: DisplayViewProps) {
   const { preferences } = snapshot;
   const updateEdge = (screenEdge: ScreenEdge) => void onChangePreferences({ ...preferences, screenEdge });
   const driverReady = snapshot.capabilities.virtualDisplay.state === "ready";
+  const mediaReady = snapshot.capabilities.mediaPipeline.state === "ready";
+  const inputReady = snapshot.capabilities.inputInjection.state === "ready";
+  const nativeLinkReady = driverReady && mediaReady && inputReady;
   const session = snapshot.activeSession;
   const readiness = session
     ? session.state === "streaming" ? "正在串流" : session.state === "recovering" ? "正在恢复" : "认证会话协商中"
-    : driverReady ? "可以建立会话" : "等待虚拟显示驱动";
+    : nativeLinkReady ? "可以建立会话" : driverReady ? "虚拟屏已启用" : "虚拟屏未启用";
 
   return (
     <div className="view-shell display-view">
@@ -30,6 +35,7 @@ export function DisplayView({ snapshot, onChangePreferences, onEndSession }: Dis
         <div className="display-heading-actions">
           <span className={`readiness-pill ${driverReady || session ? "is-ready" : ""}`}><i />{readiness}</span>
           {session && <button className="secondary-button" type="button" onClick={() => void onEndSession(session.id)}><CircleStop size={15} />结束会话</button>}
+          {!session && <button className={driverReady ? "secondary-button" : "primary-button"} type="button" disabled={virtualDisplayBusy} onClick={() => void onSetVirtualDisplay(!driverReady)}>{virtualDisplayBusy ? <LoaderCircle className="spin" size={15} /> : driverReady ? <MonitorOff size={15} /> : <MonitorUp size={15} />}{driverReady ? "撤销虚拟屏" : "启用虚拟屏"}</button>}
         </div>
       </div>
 
@@ -73,7 +79,8 @@ export function DisplayView({ snapshot, onChangePreferences, onEndSession }: Dis
         </section>
       </div>
 
-      {!driverReady && <div className="info-callout"><Info size={18} /><div><strong>原生图形链路尚未接入</strong><p>当前已经固定 UI、配置和协议边界。安装并验证 IddCx 驱动前，不会提供一个看似成功但没有画面的“开始会话”按钮。</p></div></div>}
+      {!driverReady && <div className="info-callout"><Info size={18} /><div><strong>虚拟显示器尚未启用</strong><p>“启用虚拟屏”会调用 Windows 软件设备 API，并且只有 IddCx 设备节点真实启动后才会显示就绪。当前诊断：{snapshot.capabilities.virtualDisplay.detail}</p></div></div>}
+      {driverReady && !nativeLinkReady && <div className="info-callout"><Info size={18} /><div><strong>IddCx 虚拟显示器已经真实启动</strong><p>设备会在撤销或 PeerSpan 退出时移除。媒体编码与输入链路尚未同时就绪，因此目前不会把认证控制会话标记为正在串流。</p></div></div>}
       {session && <div className="info-callout session-callout"><Info size={18} /><div><strong>TLS 1.3 控制通道已认证</strong><p>会话 {session.id.slice(0, 8)} 正在协商 {session.widthPx} × {session.heightPx} · {session.refreshHz} Hz；只有媒体管线确认就绪后才会进入“正在串流”。</p></div></div>}
     </div>
   );

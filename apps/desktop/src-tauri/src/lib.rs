@@ -2,6 +2,7 @@ mod control;
 mod discovery;
 mod identity;
 mod pairing;
+mod virtual_display;
 
 use control::{ControlRuntime, mark_control_ready, mark_control_unavailable};
 use discovery::{DiscoveryRuntime, mark_discovery_ready, mark_discovery_unavailable};
@@ -14,6 +15,7 @@ use peerspan_core::{AppSnapshot, LocalDevice, PeerSpanCore, Preferences};
 use std::{fs, sync::Arc};
 use tauri::{Manager, State};
 use uuid::Uuid;
+use virtual_display::VirtualDisplayRuntime;
 
 #[tauri::command]
 fn get_app_snapshot(core: State<'_, Arc<PeerSpanCore>>) -> Result<AppSnapshot, String> {
@@ -57,6 +59,24 @@ fn end_display_session(
 }
 
 #[tauri::command]
+fn start_virtual_display(
+    runtime: State<'_, VirtualDisplayRuntime>,
+    core: State<'_, Arc<PeerSpanCore>>,
+) -> Result<AppSnapshot, String> {
+    runtime.start()?;
+    core.snapshot().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn stop_virtual_display(
+    runtime: State<'_, VirtualDisplayRuntime>,
+    core: State<'_, Arc<PeerSpanCore>>,
+) -> Result<AppSnapshot, String> {
+    runtime.stop()?;
+    core.snapshot().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn create_pairing_offer(runtime: State<'_, PairingRuntime>) -> PairingOffer {
     runtime.create_offer()
 }
@@ -94,6 +114,7 @@ pub fn run() {
                 public_key: public_key(&identity),
             };
             let core = Arc::new(PeerSpanCore::load(local_device.clone(), &data_dir)?);
+            app.manage(VirtualDisplayRuntime::new(Arc::clone(&core)));
             let credentials = DeviceCredentials {
                 device: local_device.clone(),
                 signing_key: identity.signing_key,
@@ -130,6 +151,8 @@ pub fn run() {
             pair_device,
             request_display_session,
             end_display_session,
+            start_virtual_display,
+            stop_virtual_display,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run PeerSpan desktop application");
