@@ -37,7 +37,7 @@ peerspan/
 
 `peerspan-media` 建立编码视频访问单元的数据报边界：单个 UDP 数据报不超过 1200 字节，以 ChaCha20-Poly1305 认证加密并绑定会话 UUID、包序号、帧号、分片序号和时间戳；接收端提供 128 包重放窗口、乱序重组、8 MiB 单帧上限、最多 4 个在途帧和 80 ms 过期丢弃。Windows UDP 套接字显式申请 4 MiB 收发缓冲。双方从已认证 TLS 1.3 连接以会话 UUID 为上下文导出 36 字节密钥材料；生产 worker 已把真实共享纹理硬编访问单元送入该通道，并在接收端完成重组、硬解和呈现。
 
-`peerspan-video` 负责 Windows 原生视频能力边界。桌面启动时创建带视频支持的 D3D11 硬件设备和 Media Foundation DXGI 设备管理器，并枚举 D3D11-aware 的 H.264 编码/解码 MFT。IddCx 驱动把最新 BGRA 帧复制到按分辨率命名、带 keyed mutex 的 D3D11 NT 共享纹理；桌面端取得 key 1 后立即 GPU 复制并归还 key 0，随后在 GPU 上转 NV12 并硬编。接收端硬解 H.264，处理动态输出格式重协商，再把 NV12 转为 BGRA 并写入原生 Win32 双缓冲 D3D11 交换链。共享纹理、GPU 转换、硬编硬解和真实 `Present` 均已在当前显卡实机通过。
+`peerspan-video` 负责 Windows 原生视频能力边界。桌面启动时创建带视频支持的 D3D11 硬件设备和 Media Foundation DXGI 设备管理器，并枚举 D3D11-aware 的 H.264 编码/解码 MFT。IddCx 驱动把最新 BGRA 帧复制到按分辨率命名、带 keyed mutex 的 D3D11 NT 共享纹理；桌面端取得 key 1 后立即 GPU 复制并归还 key 0，随后在 GPU 上转 NV12 并硬编。接收端从硬解 MFT 直接取得同一 D3D11 设备上的 NV12 纹理，用 GPU Video Processor 转为交换链 BGRA 后 `Present`；生产呈现路径没有 CPU 像素读回，CPU NV12 读取只保留给编解码测试断言。共享纹理、双向 GPU 转换、硬编硬解和真实 `Present` 均已在当前显卡实机通过。
 
 接收窗口把焦点内的归一化鼠标、按钮、滚轮和键盘扫描码送回认证 TLS 通道；发送端只在活动会话内使用 `SendInput`，并把绝对指针限定到 PeerSpan 虚拟显示器。紧急释放组合由本机偏好解析，要求至少两个修饰键；失焦、窗口关闭和断线都会发送 Release All。剪贴板只同步 UTF-8 文本，限制 1 MiB，并用双向修订号和本机写入抑制阻止循环。
 

@@ -34,7 +34,7 @@ TLS 控制通道使用 `rustls`、`rcgen` 和 `x509-parser`。它们都是由 `C
 
 Windows 视频管线使用 Cargo 管理的 `windows` crate 调用系统自带 D3D11 与 Media Foundation，不需要向 `D:\Dev\Env` 安装额外 SDK。独立探测命令为 `cargo run -p peerspan-video --example probe`；2026-08-01 在当前 Windows 10 22H2 开发机上确认 D3D 11.1、`NVIDIA H.264 Encoder MFT` 与 `Microsoft H264 Video Decoder MFT` 均为 D3D11-aware，并完成 640×360 NV12 → 硬件 H.264 关键帧 → D3D11 解码 NV12 的实机闭环。对应硬件测试可用 `cargo test -p peerspan-video -- --ignored` 重跑。
 
-IddCx/桌面帧交接同样只使用现有 WDK、D3D11 和 Cargo `windows` 绑定，不新增环境。硬件忽略项测试覆盖两个独立 D3D11 设备间的 keyed-mutex NT 共享纹理、GPU BGRA→NV12、硬件编解码和原生 D3D11 交换链首帧呈现；它验证共享契约和接收最后一跳，但不会安装或启动驱动。IddCx 工程已用 1.2 头文件和 build 18362 INF 目标完成 Release x64 构建。
+IddCx/桌面帧交接同样只使用现有 WDK、D3D11 和 Cargo `windows` 绑定，不新增环境。硬件忽略项测试覆盖两个独立 D3D11 设备间的 keyed-mutex NT 共享纹理、GPU BGRA→NV12、硬件编解码、同设备解码纹理→GPU BGRA 和原生 D3D11 交换链首帧呈现；它验证共享契约和无 CPU 读回的接收最后一跳，但不会安装或启动驱动。IddCx 工程已用 1.2 头文件和 build 18362 INF 目标完成 Release x64 构建。
 
 ## Rust 环境变量
 

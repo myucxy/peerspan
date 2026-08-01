@@ -725,6 +725,102 @@ impl Drop for GpuBgraToNv12 {
     }
 }
 
+struct GpuNv12ToBgra {
+    transform: Option<IMFTransform>,
+    context: ID3D11DeviceContext,
+    frame_duration_hns: i64,
+}
+
+impl GpuNv12ToBgra {
+    fn new(
+        context: &ID3D11DeviceContext,
+        manager: &IMFDXGIDeviceManager,
+        width: u32,
+        height: u32,
+        frames_per_second: u32,
+    ) -> Result<Self, VideoError> {
+        let transform: IMFTransform =
+            unsafe { CoCreateInstance(&CLSID_VideoProcessorMFT, None, CLSCTX_INPROC_SERVER) }
+                .map_err(|error| VideoError::Codec(error.to_string()))?;
+        unsafe {
+            transform.ProcessMessage(
+                MFT_MESSAGE_SET_D3D_MANAGER,
+                Interface::as_raw(manager) as usize,
+            )?;
+        }
+        configure_nv12_to_bgra_types(&transform, width, height, frames_per_second)?;
+        unsafe {
+            transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
+            transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
+        }
+        Ok(Self {
+            transform: Some(transform),
+            context: context.clone(),
+            frame_duration_hns: 10_000_000_i64 / i64::from(frames_per_second),
+        })
+    }
+
+    fn convert_into(
+        &mut self,
+        source: &ID3D11Texture2D,
+        destination: &ID3D11Texture2D,
+        timestamp_micros: u64,
+    ) -> Result<(), VideoError> {
+        let transform = self
+            .transform
+            .as_ref()
+            .ok_or_else(|| VideoError::Codec("color converter is already shut down".into()))?;
+        let input_sample = create_input_sample(source, timestamp_micros, self.frame_duration_hns)?;
+        unsafe { transform.ProcessInput(0, &input_sample, 0) }
+            .map_err(|error| VideoError::Codec(error.to_string()))?;
+        let stream_info = unsafe { transform.GetOutputStreamInfo(0) }
+            .map_err(|error| VideoError::Codec(error.to_string()))?;
+        let provides_sample =
+            stream_info.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 as u32 != 0;
+        let output_sample = if provides_sample {
+            None
+        } else {
+            Some(create_input_sample(
+                destination,
+                timestamp_micros,
+                self.frame_duration_hns,
+            )?)
+        };
+        let mut output = MFT_OUTPUT_DATA_BUFFER {
+            dwStreamID: 0,
+            pSample: ManuallyDrop::new(output_sample),
+            dwStatus: 0,
+            pEvents: ManuallyDrop::new(None),
+        };
+        let mut status = 0;
+        let result =
+            unsafe { transform.ProcessOutput(0, slice::from_mut(&mut output), &mut status) };
+        let sample = unsafe { ManuallyDrop::take(&mut output.pSample) };
+        let events = unsafe { ManuallyDrop::take(&mut output.pEvents) };
+        drop(events);
+        result.map_err(|error| VideoError::Codec(error.to_string()))?;
+        if provides_sample {
+            let sample = sample.ok_or_else(|| {
+                VideoError::Codec("video processor returned no BGRA output sample".into())
+            })?;
+            let texture = texture_from_sample(&sample)?;
+            unsafe { self.context.CopyResource(destination, &texture) };
+        } else {
+            drop(sample);
+        }
+        Ok(())
+    }
+}
+
+impl Drop for GpuNv12ToBgra {
+    fn drop(&mut self) {
+        if let Some(transform) = self.transform.take() {
+            let _ = unsafe { transform.ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0) };
+            let _ = unsafe { transform.ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0) };
+        }
+    }
+}
+
 pub struct HardwareH264Decoder {
     transform: Option<IMFTransform>,
     activation: IMFActivate,
@@ -736,6 +832,7 @@ pub struct HardwareH264Decoder {
     frame_duration_hns: i64,
     output_renegotiations: u8,
     device: ID3D11Device,
+    context: ID3D11DeviceContext,
     manager: IMFDXGIDeviceManager,
     _runtime: RuntimeGuard,
 }
@@ -786,6 +883,7 @@ impl HardwareH264Decoder {
             frame_duration_hns: 10_000_000_i64 / i64::from(config.frames_per_second),
             output_renegotiations: 0,
             device: d3d.device,
+            context: d3d.context,
             manager: d3d.manager,
             _runtime: runtime,
         })
@@ -796,6 +894,24 @@ impl HardwareH264Decoder {
         access_unit: &[u8],
         timestamp_micros: u64,
     ) -> Result<Option<DecodedNv12Frame>, VideoError> {
+        self.submit_access_unit(access_unit, timestamp_micros)?;
+        self.read_output(timestamp_micros)
+    }
+
+    fn decode_texture(
+        &mut self,
+        access_unit: &[u8],
+        timestamp_micros: u64,
+    ) -> Result<Option<ID3D11Texture2D>, VideoError> {
+        self.submit_access_unit(access_unit, timestamp_micros)?;
+        self.read_output_texture()
+    }
+
+    fn submit_access_unit(
+        &mut self,
+        access_unit: &[u8],
+        timestamp_micros: u64,
+    ) -> Result<(), VideoError> {
         if access_unit.is_empty() {
             return Err(VideoError::Codec("H.264 access unit is empty".into()));
         }
@@ -815,7 +931,7 @@ impl HardwareH264Decoder {
             self.wait_for_have_output()?;
             self.have_output = false;
         }
-        self.read_output(timestamp_micros)
+        Ok(())
     }
 
     fn wait_for_need_input(&mut self) -> Result<(), VideoError> {
@@ -953,6 +1069,46 @@ impl HardwareH264Decoder {
             bytes: bytes[..expected].to_vec(),
         }))
     }
+
+    fn read_output_texture(&mut self) -> Result<Option<ID3D11Texture2D>, VideoError> {
+        let transform = self
+            .transform
+            .as_ref()
+            .ok_or_else(|| VideoError::Codec("decoder is already shut down".into()))?;
+        let stream_info = unsafe { transform.GetOutputStreamInfo(0) }
+            .map_err(|error| VideoError::Codec(error.to_string()))?;
+        if stream_info.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 as u32 == 0 {
+            return Err(VideoError::Codec(
+                "D3D11 decoder did not expose a GPU output sample".into(),
+            ));
+        }
+        let mut output = MFT_OUTPUT_DATA_BUFFER {
+            dwStreamID: 0,
+            pSample: ManuallyDrop::new(None),
+            dwStatus: 0,
+            pEvents: ManuallyDrop::new(None),
+        };
+        let mut status = 0;
+        let process_result =
+            unsafe { transform.ProcessOutput(0, slice::from_mut(&mut output), &mut status) };
+        let sample = unsafe { ManuallyDrop::take(&mut output.pSample) };
+        let events = unsafe { ManuallyDrop::take(&mut output.pEvents) };
+        drop(events);
+        if let Err(error) = process_result {
+            if error.code() == MF_E_TRANSFORM_NEED_MORE_INPUT {
+                return Ok(None);
+            }
+            if error.code() == MF_E_TRANSFORM_STREAM_CHANGE && self.output_renegotiations < 4 {
+                select_decoder_output_type(transform)?;
+                self.output_renegotiations += 1;
+                return self.read_output_texture();
+            }
+            return Err(VideoError::Codec(error.to_string()));
+        }
+        let sample =
+            sample.ok_or_else(|| VideoError::Codec("decoder produced no GPU sample".into()))?;
+        texture_from_sample(&sample).map(Some)
+    }
 }
 
 impl Drop for HardwareH264Decoder {
@@ -963,7 +1119,7 @@ impl Drop for HardwareH264Decoder {
             drop(transform);
         }
         let _ = unsafe { self.activation.ShutdownObject() };
-        let _ = (&self.device, &self.manager);
+        let _ = (&self.device, &self.context, &self.manager);
     }
 }
 
@@ -980,7 +1136,7 @@ impl NativeVideoReceiver {
     ) -> Result<Self, VideoError> {
         validate_decoder_config(config)?;
         let decoder = HardwareH264Decoder::new(config)?;
-        let presenter = NativeD3dPresenter::open(config.width, config.height, title, shortcut)?;
+        let presenter = NativeD3dPresenter::open(&decoder, config, title, shortcut)?;
         Ok(Self { decoder, presenter })
     }
 
@@ -993,10 +1149,10 @@ impl NativeVideoReceiver {
         if self.presenter.close_requested() {
             return Ok(false);
         }
-        let Some(frame) = self.decoder.decode(access_unit, timestamp_micros)? else {
+        let Some(texture) = self.decoder.decode_texture(access_unit, timestamp_micros)? else {
             return Ok(false);
         };
-        self.presenter.present(&frame.bytes)?;
+        self.presenter.present(&texture, timestamp_micros)?;
         Ok(true)
     }
 
@@ -1055,9 +1211,7 @@ struct NativeD3dPresenter {
     swap_chain: IDXGISwapChain1,
     back_buffer: ID3D11Texture2D,
     context: ID3D11DeviceContext,
-    width: u32,
-    height: u32,
-    bgra: Vec<u8>,
+    converter: GpuNv12ToBgra,
     state: Box<WindowState>,
 }
 
@@ -1074,14 +1228,13 @@ impl Drop for CreatedWindow {
 
 impl NativeD3dPresenter {
     fn open(
-        width: u32,
-        height: u32,
+        decoder: &HardwareH264Decoder,
+        config: DecoderConfig,
         title: &str,
         shortcut: ReceiverReleaseShortcut,
     ) -> Result<Self, VideoError> {
         register_receiver_window_class()?;
-        let d3d = create_video_device()?;
-        let dxgi_device: IDXGIDevice = d3d
+        let dxgi_device: IDXGIDevice = decoder
             .device
             .cast()
             .map_err(|error| VideoError::D3d11(error.to_string()))?;
@@ -1099,11 +1252,11 @@ impl NativeD3dPresenter {
             windows_down: false,
             shortcut,
         });
-        let hwnd = create_receiver_window(width, height, title, state.as_mut())?;
+        let hwnd = create_receiver_window(config.width, config.height, title, state.as_mut())?;
         let mut window_guard = CreatedWindow(hwnd);
         let description = DXGI_SWAP_CHAIN_DESC1 {
-            Width: width,
-            Height: height,
+            Width: config.width,
+            Height: config.height,
             Format: DXGI_FORMAT_B8G8R8A8_UNORM,
             Stereo: false.into(),
             SampleDesc: DXGI_SAMPLE_DESC {
@@ -1119,7 +1272,7 @@ impl NativeD3dPresenter {
         };
         let swap_chain = unsafe {
             factory.CreateSwapChainForHwnd(
-                &d3d.device,
+                &decoder.device,
                 hwnd,
                 &description,
                 None,
@@ -1129,7 +1282,19 @@ impl NativeD3dPresenter {
         .map_err(|error| VideoError::D3d11(error.to_string()))?;
         let back_buffer: ID3D11Texture2D = unsafe { swap_chain.GetBuffer(0) }
             .map_err(|error| VideoError::D3d11(error.to_string()))?;
-        validate_texture(&back_buffer, width, height, DXGI_FORMAT_B8G8R8A8_UNORM)?;
+        validate_texture(
+            &back_buffer,
+            config.width,
+            config.height,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+        )?;
+        let converter = GpuNv12ToBgra::new(
+            &decoder.context,
+            &decoder.manager,
+            config.width,
+            config.height,
+            config.frames_per_second,
+        )?;
         // SAFETY: the HWND is complete and remains owned by this presenter.
         let _ = unsafe { ShowWindow(hwnd, SW_SHOW) };
         window_guard.0 = HWND::default();
@@ -1138,10 +1303,8 @@ impl NativeD3dPresenter {
             hwnd,
             swap_chain,
             back_buffer,
-            context: d3d.context,
-            width,
-            height,
-            bgra: vec![0; width as usize * height as usize * 4],
+            context: decoder.context.clone(),
+            converter,
             state,
         })
     }
@@ -1159,20 +1322,10 @@ impl NativeD3dPresenter {
         Ok(())
     }
 
-    fn present(&mut self, nv12: &[u8]) -> Result<(), VideoError> {
-        nv12_to_bgra(nv12, self.width, self.height, &mut self.bgra)?;
-        // SAFETY: the destination is the live swap-chain back buffer and the
-        // source contains width*height tightly packed BGRA pixels.
-        unsafe {
-            self.context.UpdateSubresource(
-                &self.back_buffer,
-                0,
-                None,
-                self.bgra.as_ptr().cast(),
-                self.width * 4,
-                (self.bgra.len().min(u32::MAX as usize)) as u32,
-            );
-        }
+    fn present(&mut self, nv12: &ID3D11Texture2D, timestamp_micros: u64) -> Result<(), VideoError> {
+        self.converter
+            .convert_into(nv12, &self.back_buffer, timestamp_micros)?;
+        unsafe { self.context.Flush() };
         unsafe { self.swap_chain.Present(0, DXGI_PRESENT(0)) }
             .ok()
             .map_err(|error| VideoError::D3d11(error.to_string()))
@@ -1412,41 +1565,6 @@ fn low_i16(value: usize) -> i16 {
 
 fn high_i16(value: usize) -> i16 {
     ((value >> 16) & 0xffff) as u16 as i16
-}
-
-fn nv12_to_bgra(nv12: &[u8], width: u32, height: u32, bgra: &mut [u8]) -> Result<(), VideoError> {
-    let expected_nv12 = nv12_frame_bytes(width, height)?;
-    let expected_bgra = width as usize * height as usize * 4;
-    if nv12.len() < expected_nv12 || bgra.len() != expected_bgra {
-        return Err(VideoError::Codec(format!(
-            "presenter buffer mismatch: NV12 {} (expected {expected_nv12}), BGRA {} (expected {expected_bgra})",
-            nv12.len(),
-            bgra.len()
-        )));
-    }
-    let width = width as usize;
-    let height = height as usize;
-    let y_plane_bytes = width * height;
-    for y in 0..height {
-        let y_row = y * width;
-        let uv_row = y_plane_bytes + (y / 2) * width;
-        for x in 0..width {
-            let luma = i32::from(nv12[y_row + x]).saturating_sub(16);
-            let chroma = uv_row + (x & !1);
-            let u = i32::from(nv12[chroma]) - 128;
-            let v = i32::from(nv12[chroma + 1]) - 128;
-            let c = 298 * luma;
-            let red = ((c + 459 * v + 128) >> 8).clamp(0, 255) as u8;
-            let green = ((c - 55 * u - 136 * v + 128) >> 8).clamp(0, 255) as u8;
-            let blue = ((c + 541 * u + 128) >> 8).clamp(0, 255) as u8;
-            let output = (y_row + x) * 4;
-            bgra[output] = blue;
-            bgra[output + 1] = green;
-            bgra[output + 2] = red;
-            bgra[output + 3] = 255;
-        }
-    }
-    Ok(())
 }
 
 fn validate_encoder_config(config: EncoderConfig) -> Result<(), VideoError> {
@@ -1692,6 +1810,42 @@ fn configure_color_converter_types(
         frames_per_second,
         width,
         nv12_bytes,
+    )?;
+    unsafe {
+        transform.SetInputType(0, &input, 0)?;
+        transform.SetOutputType(0, &output, 0)?;
+    }
+    Ok(())
+}
+
+fn configure_nv12_to_bgra_types(
+    transform: &IMFTransform,
+    width: u32,
+    height: u32,
+    frames_per_second: u32,
+) -> Result<(), VideoError> {
+    let nv12_bytes = u32::try_from(nv12_frame_bytes(width, height)?)
+        .map_err(|_| VideoError::InvalidConfiguration("NV12 frame size exceeds 4 GiB".into()))?;
+    let input = create_uncompressed_video_type(
+        MFVideoFormat_NV12,
+        width,
+        height,
+        frames_per_second,
+        width,
+        nv12_bytes,
+    )?;
+    let output = create_uncompressed_video_type(
+        MFVideoFormat_ARGB32,
+        width,
+        height,
+        frames_per_second,
+        width
+            .checked_mul(4)
+            .ok_or_else(|| VideoError::InvalidConfiguration("BGRA stride overflows".into()))?,
+        width
+            .checked_mul(height)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| VideoError::InvalidConfiguration("BGRA frame size overflows".into()))?,
     )?;
     unsafe {
         transform.SetInputType(0, &input, 0)?;
