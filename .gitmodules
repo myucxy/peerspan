@@ -4,3 +4,7 @@
 [submodule "third_party/moonlight-qt"]
 	path = third_party/moonlight-qt
 	url = https://github.com/moonlight-stream/moonlight-qt.git
+[submodule "third_party/virtual-display-driver"]
+	path = third_party/virtual-display-driver
+	url = https://github.com/VirtualDrivers/Virtual-Display-Driver.git
+	shallow = true

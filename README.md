@@ -2,7 +2,7 @@
 
 > 窗口跨屏，算力留在原机。
 
-PeerSpan 自 2026-08-01 起采用 GNU General Public License v3.0 only。Sunshine 与 Moonlight 作为高性能串流核心按各自 GPLv3 条款保留版权与许可证，微软 IddCx 示例派生文件继续单独遵循 Microsoft Public License。详见 [第三方组件与许可证](THIRD_PARTY_NOTICES.md)。
+PeerSpan 自 2026-08-01 起采用 GNU General Public License v3.0 only。Sunshine 与 Moonlight 作为高性能串流核心按各自 GPLv3 条款保留版权与许可证；VirtualDrivers VDD 按 MIT 许可证提供正式签名的虚拟显示驱动。旧微软 IddCx 示例派生文件仅作为历史原型保留并继续单独遵循 Microsoft Public License。详见 [第三方组件与许可证](THIRD_PARTY_NOTICES.md)。
 
 PeerSpan 是一个局域网内的对等桌面扩展和远程应用方案。A、B 两台 Windows 电脑都安装同一个客户端后，可以把对方当作一块可交互的扩展屏；也可以将没有物理显示器的 C 配置为应用节点，从 A/B 的菜单中启动 C 上的软件。窗口的画面和输入跨机器传输，但进程、CPU/GPU 计算、文件访问和应用状态始终保留在窗口原来的电脑上。
 
@@ -67,20 +67,19 @@ Windows 服务本身运行在 Session 0，不能直接承载普通 GUI。安装�
 - 六位配对码、SPAKE2 密钥协商、XChaCha20-Poly1305 加密和 Ed25519 身份签名；
 - 仅启用 TLS 1.3、按已配对 Ed25519 公钥双向认证的长期控制通道，以及会话心跳、延迟统计和双端清理；
 - DPI 无关的输入坐标映射与版本化控制协议基础；
-- 可无错误构建、打包和测试签名的 IddCx 1.2 单屏 1080p60 驱动，INF 最低目标为 Windows 10 1903 build 18362；
-- 通过 Windows 软件设备 API 启用/撤销 IddCx 虚拟屏、验证设备节点启动状态并在退出时清理的桌面生命周期控制；
+- 固定并审计 VirtualDrivers VDD `25.7.23`，安装包携带其官方签名的 x64 IddCx 驱动并校验发布 ZIP 与包内文件哈希；
+- 通过 Windows 软件设备 API 使用上游 `MttVDD` 硬件 ID 启用/撤销虚拟屏，验证设备节点和桌面拓扑，并在撤销或退出时清理；
 - 默认使用 Sunshine + Moonlight 的 GameStream/RTP/FEC、硬件编解码与直接输入，PeerSpan 双向认证 TLS 负责后端协商、PIN 协调、身份授权、心跳、剪贴板和清理；
 - 保留由 TLS 1.3 exporter 派生会话密钥的原生加密 UDP 媒体通道，作为兼容回退和性能 A/B；
 - 基于真实 D3D11 视频设备与 Media Foundation MFT 的低延迟 H.264 硬件编解码，包含 DXGI 纹理输入、异步事件超时、解码格式重协商和实机帧闭环；
-- IddCx 最新帧通过零等待 keyed-mutex 命名纹理交给桌面进程，消费者立即 GPU 复制并在 GPU 上完成 BGRA→NV12，慢消费者只丢帧、不阻塞 DWM；
-- 真实共享纹理硬编发送 worker、同设备硬解纹理→GPU NV12/BGRA 转换→原生 Win32/D3D11 双缓冲呈现窗口；生产接收路径无 CPU 像素读回，首帧成功 `Present` 后才进入串流状态；
+- 默认生产链路由 Sunshine 直接捕获 VDD 扩展屏并完成硬件编码，Moonlight 负责低延迟硬解、呈现与输入；旧命名共享纹理原生链路仅保留为历史实验，不再作为 VDD 的可选生产后端；
 - 认证 TLS 输入回传、限定虚拟屏的 `SendInput` 注入、可配置紧急释放、断连全键释放和遗留窗口回迁；
 - 1 MiB 上限的双向纯文本剪贴板同步、循环抑制、1 秒失活清理和随局域网发现持续自动重连；
 - 当前用户级 Windows 登录自启动；
 - Rust、TypeScript、Vitest、Web 生产构建和 Tauri Release 构建验证；
-- 包含 PeerSpan 测试驱动、证书、防火墙规则和 WebView2 离线运行时的一体化 NSIS 安装包，并已在 `192.168.9.26` 验证安装链路。
+- 包含正式签名 VDD、Sunshine/Moonlight、防火墙规则和 WebView2 离线运行时的一体化 NSIS 安装包；安装脚本保留预先存在的 VDD 配置和安装所有权。
 
-MVP 代码链路已经贯通。当前开发机未安装 PeerSpan 测试驱动，因此剩余工作属于外部实机验收：在专用 Windows 10/11 机器安装测试/正式签名驱动，验证真实 IddCx 帧跨两台电脑、1080p60 长稳和端到端低于 80 ms。仓库不会自动修改系统测试签名或信任，也不会用模拟画面代替这项验收。
+MVP 代码链路已经贯通。当前发布路线不再要求自签 PeerSpan 驱动或开启 Windows 测试签名；剩余发布门槛是完成 VDD 扩展屏、Sunshine/Moonlight 双机链路、1080p60 长稳和端到端低于 80 ms 的 Windows 10/11 实机矩阵。仓库不会开启全局忽略驱动签名，也不会用模拟画面代替这项验收。
 
 ## 本地开发
 

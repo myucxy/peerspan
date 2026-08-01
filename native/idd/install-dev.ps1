@@ -47,6 +47,32 @@ function Resolve-NativeSystemTool([string]$Name) {
     throw "Required Windows system tool was not found: $Name"
 }
 
+function Add-CertificateToLocalMachineStore(
+    [string]$CertificatePath,
+    [string]$StoreName
+) {
+    $certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($CertificatePath)
+    $store = [Security.Cryptography.X509Certificates.X509Store]::new(
+        $StoreName,
+        [Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine
+    )
+
+    try {
+        $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+        $matches = $store.Certificates.Find(
+            [Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
+            $certificate.Thumbprint,
+            $false
+        )
+        if ($matches.Count -eq 0) {
+            $store.Add($certificate)
+        }
+    } finally {
+        $store.Close()
+        $certificate.Reset()
+    }
+}
+
 $pnpUtil = Resolve-NativeSystemTool "pnputil.exe"
 
 $outputDirectory = Join-Path $PSScriptRoot "$Platform\$Configuration"
@@ -70,8 +96,8 @@ if ($TrustTestCertificate) {
         "LocalMachine Root and TrustedPublisher certificate stores",
         "Trust the PeerSpan development test-signing certificate"
     )) {
-        Import-Certificate -FilePath $certificate -CertStoreLocation "Cert:\LocalMachine\Root" | Out-Null
-        Import-Certificate -FilePath $certificate -CertStoreLocation "Cert:\LocalMachine\TrustedPublisher" | Out-Null
+        Add-CertificateToLocalMachineStore -CertificatePath $certificate -StoreName "Root"
+        Add-CertificateToLocalMachineStore -CertificatePath $certificate -StoreName "TrustedPublisher"
     }
 }
 

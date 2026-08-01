@@ -24,12 +24,23 @@ PeerSpan 用户态应用与原创 Rust/TypeScript 代码采用 `GPL-3.0-only`，
 
 Moonlight Qt 还通过其自身子模块引用 `moonlight-common-c`、`qmdnsengine` 和 `SDL_GameControllerDB`。构建或发布 Moonlight 产物时必须递归取得这些依赖，并保留各依赖自己的许可证文件。
 
-## PeerSpan IddCx
+## VirtualDrivers Virtual Display Driver
+
+- 上游：<https://github.com/VirtualDrivers/Virtual-Display-Driver>
+- 审计源码固定提交：`d437ebc9b44a14ce6e5cc9c8b7f6beb08d6faf77`（release `25.7.23`）
+- 本地路径：`third_party/virtual-display-driver`
+- 安装包二进制：官方 `VirtualDisplayDriver-x86.Driver.Only.zip`；文件名沿用上游命名，包内 INF 实际目标为 `NTamd64`
+- 官方 ZIP SHA-256：`E24210692B442B39AF763536330CE78B423F19342B7A7792C26DE3944E418B3A`
+- 驱动版本：`11.30.4.434`；CAT 签名者：SignPath Foundation
+- 许可证：MIT，见子模块内 `LICENSE`
+- 用途：创建 Windows 10/11 IddCx 虚拟扩展屏，供 Sunshine 捕获并支持常用分辨率、刷新率和 HDR 能力
+
+PeerSpan 不修改官方 INF、CAT 或 DLL，而是使用 INF 公开的 `MttVDD` 软件设备硬件 ID 管理显示器生命周期，因此不会破坏上游签名。安装脚本只在系统原先没有配置时写入一屏默认配置，并记录驱动、证书与配置所有权，卸载时保留安装前已经存在的 VDD。
+
+## 旧 PeerSpan IddCx 原型（不进入当前安装包）
 
 - 上游：微软 `windows-driver-samples/video/IndirectDisplay`
 - 固定提交：`ef7c3074748ab05726c3a9161d3256118efd76e2`
 - 本地路径：`native/idd`
 - 许可证：Microsoft Public License，见 `native/idd/LICENSE.MS-PL`
-- 用途：PeerSpan 虚拟扩展显示器和 D3D11 共享帧接口
-
-IddCx 驱动是与用户态应用分离的独立二进制，不把 MS-PL 源码链接进 GPLv3 应用进程。
+- 状态：仅保留历史实现与原生媒体实验；当前 VDD + Sunshine/Moonlight 发布路径不构建或分发该测试签名驱动

@@ -45,6 +45,30 @@ function Resolve-NativeSystemTool([string]$Name) {
     throw "Required Windows system tool was not found: $Name"
 }
 
+function Remove-CertificateFromLocalMachineStore(
+    [string]$Thumbprint,
+    [string]$StoreName
+) {
+    $store = [Security.Cryptography.X509Certificates.X509Store]::new(
+        $StoreName,
+        [Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine
+    )
+
+    try {
+        $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+        $matches = $store.Certificates.Find(
+            [Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
+            $Thumbprint,
+            $false
+        )
+        foreach ($match in $matches) {
+            $store.Remove($match)
+        }
+    } finally {
+        $store.Close()
+    }
+}
+
 $pnpUtil = Resolve-NativeSystemTool "pnputil.exe"
 
 function Find-PeerSpanDriverPackagesWithPnpUtil {
@@ -90,6 +114,21 @@ foreach ($packageName in $packageNames) {
     }
 }
 
+$softwareDeviceInstanceId = "SWD\PeerSpanVirtualDisplay\PeerSpanVirtualDisplay"
+$deviceEnumeration = @(& $pnpUtil /enum-devices /instanceid $softwareDeviceInstanceId)
+if ($LASTEXITCODE -eq 0 -and
+    ($deviceEnumeration -match [Regex]::Escape($softwareDeviceInstanceId))) {
+    if ($PSCmdlet.ShouldProcess(
+        $softwareDeviceInstanceId,
+        "Remove the disconnected PeerSpan software-device node"
+    )) {
+        & $pnpUtil /remove-device $softwareDeviceInstanceId
+        if ($LASTEXITCODE -ne 0) {
+            throw "pnputil failed to remove the PeerSpan software-device node (exit code $LASTEXITCODE)."
+        }
+    }
+}
+
 if ($RemoveTestCertificate) {
     $certificatePath = Join-Path $PSScriptRoot "$Platform\$Configuration\PeerSpanIdd.cer"
     if (-not (Test-Path -LiteralPath $certificatePath -PathType Leaf)) {
@@ -97,14 +136,17 @@ if ($RemoveTestCertificate) {
     }
     $certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($certificatePath)
     foreach ($storeName in @("Root", "TrustedPublisher")) {
-        $storePath = "Cert:\LocalMachine\$storeName\$($certificate.Thumbprint)"
-        if ((Test-Path -LiteralPath $storePath) -and $PSCmdlet.ShouldProcess(
-            $storePath,
+        $storeDescription = "LocalMachine $storeName certificate store"
+        if ($PSCmdlet.ShouldProcess(
+            $storeDescription,
             "Remove the PeerSpan development test-signing certificate"
         )) {
-            Remove-Item -LiteralPath $storePath
+            Remove-CertificateFromLocalMachineStore `
+                -Thumbprint $certificate.Thumbprint `
+                -StoreName $storeName
         }
     }
+    $certificate.Reset()
 }
 
 if ($RemoveFirewallRules) {

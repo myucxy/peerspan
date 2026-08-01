@@ -2,7 +2,7 @@
 
 更新日期：2026-08-01
 
-本文用于完成普通开发机无法安全执行的最后验收：安装 PeerSpan 测试/正式签名 IddCx 驱动，在两台真实 Windows 电脑之间验证完整 1080p60 链路。验收不得使用模拟画面，也不得仅凭控制通道连接就记录为串流成功。
+本文用于验收正式签名 VirtualDrivers VDD 与 Sunshine/Moonlight 在两台真实 Windows 电脑之间的完整 1080p60 链路。验收不得使用模拟画面，也不得仅凭控制通道连接或设备节点启动就记录为串流成功。
 
 ## 测试矩阵
 
@@ -18,7 +18,7 @@
 
 ## 1. 构建与驱动安装
 
-专用机优先使用 [Windows 一体化测试安装包](windows-installer.zh-CN.md)。它不要求目标机安装开发环境，并会把应用、WebView2 离线运行时、PeerSpan 驱动、匹配证书与防火墙规则作为一个事务入口安装和卸载。以下独立脚本仅用于驱动开发诊断。
+专用机优先使用 [Windows 一体化安装包](windows-installer.zh-CN.md)。它不要求目标机安装开发环境，并会把应用、WebView2、正式签名 VDD、Sunshine/Moonlight 与防火墙规则作为一个事务入口安装和卸载。以下独立脚本仅用于 VDD 集成诊断。
 
 在来源电脑的非管理员终端构建：
 
@@ -28,28 +28,27 @@ $env:CARGO_HOME = "D:\Dev\Env\Rust\cargo"
 $env:PATH = "D:\Dev\Env\Rust\cargo\bin;$env:PATH"
 
 npm run build
-pwsh -File native\idd\build.ps1 -Configuration Release -Platform x64
+npm run build:installer
 ```
 
-确认除已审阅的 InfVerif 2084 外没有其他 InfVerif、Catalog 或签名警告。2084 针对 Windows 自带 `WUDFRd.sys` 不在 PeerSpan 的 `CopyFiles` 清单中；Windows 10 下必须使用与系统 `rdpidd.inf` 相同的 `AddService` 模式，项目构建只把该诊断降为消息，不会复制或分发系统驱动。测试证书信任和驱动安装属于系统变更，只能由测试机管理员审阅脚本后，在提升权限的 PowerShell 中显式执行：
+确认相邻 manifest 中 `testSignedDriver` 为 `false`，VDD release 为 `25.7.23`，发布 ZIP SHA-256 为 `E24210692B442B39AF763536330CE78B423F19342B7A7792C26DE3944E418B3A`。独立安装属于系统变更，只能由管理员审阅脚本后，在提升权限的 PowerShell 中执行：
 
 ```powershell
-pwsh -File native\idd\install-dev.ps1 `
-  -Configuration Release `
-  -Platform x64 `
-  -TrustTestCertificate `
+pwsh -File native\vdd\install.ps1 `
+  -PackageDirectory D:\Dev\Env\PeerSpan\runtimes\virtual-display-driver-25.7.23\VirtualDisplayDriver `
+  -TrustPublisher `
   -AcknowledgeSystemChanges `
   -Confirm
 ```
 
-生产签名包不使用 `-TrustTestCertificate`。安装后用设备管理器或 `pnputil /enum-drivers` 确认 Provider 为 `PeerSpan Project`，不得开启全局忽略驱动签名策略来掩盖包错误。
+安装后用设备管理器或 `pnputil /enum-drivers` 确认 Original Name 为 `MttVDD.inf`、Provider 为 `MikeTheTech`、版本为 `11.30.4.434`。不得开启全局忽略驱动签名策略来掩盖包错误。
 
 ## 2. 虚拟显示器
 
 1. 启动 `target\release\peerspan-desktop.exe`。
 2. 在“屏幕会话”页启用虚拟屏。
-3. 只有界面显示 IddCx 设备节点 `DN_STARTED` 后继续。
-4. 在 Windows 显示设置中确认 `PeerSpan Virtual Display` 为扩展模式、1920×1080、60 Hz。
+3. 只有界面显示 VirtualDrivers VDD 设备节点 `DN_STARTED` 且桌面布局成功后继续。
+4. 在 Windows 显示设置中确认 `Virtual Display Driver` 为扩展模式、1920×1080、60 Hz。
 5. 依次选择左、右、上、下，确认 Windows 真实显示拓扑随界面设置变化。
 6. 活动会话期间尝试撤销虚拟屏，必须被拒绝；结束会话后撤销必须移除设备节点。
 
@@ -86,13 +85,10 @@ PeerSpan 内部控制 RTT 只能辅助诊断，不能替代玻璃到玻璃延迟
 
 ## 6. 卸载与证据
 
-测试完成后，在提升权限的 PowerShell 中显式卸载测试包和测试证书：
+测试完成后优先从 Windows“应用和功能”卸载一体化包。独立安装场景可在提升权限的 PowerShell 中执行：
 
 ```powershell
-pwsh -File native\idd\uninstall-dev.ps1 `
-  -Configuration Release `
-  -Platform x64 `
-  -RemoveTestCertificate `
+pwsh -File native\vdd\uninstall.ps1 `
   -AcknowledgeSystemChanges `
   -Confirm
 ```
@@ -101,6 +97,10 @@ pwsh -File native\idd\uninstall-dev.ps1 `
 
 ## 7. 当前专用机记录
 
-2026-08-01，`192.168.9.26` 已通过一体化包完成应用、测试证书、PeerSpan IddCx 驱动和 LocalSubnet 防火墙规则安装。SetupAPI 记录设备配置完成且 `Start` 为 `SUCCESS`；同时活动 RDP 的 `RdpIdd_IndirectDisplay` 以 `PNP_VetoOutstandingOpen` 拒绝显示栈重启并标记 `Device required reboot`。应用在桌面拓扑未出现 PeerSpan 屏幕后按安全逻辑释放了软件设备。
+2026-08-02，开发机 Windows 10 build 19045 已通过正式签名 VDD 的本机实测：`SWD\MttVDD\PeerSpanVirtualDisplay` 进入扩展桌面并切换到 `1920×1080@60`，完整卸载/重装后复测通过，一体化安装包覆盖安装退出码为 0。该机器同时存在 Todesk Virtual Display Adapter，VDD 身份匹配未误选其他虚拟适配器。
 
-该记录只表示“安装链路通过”，不表示第 2 至第 6 节通过。下一次从此处继续时，先重启专用机，尽量从物理控制台或非 RDP 显示链路启用虚拟屏，然后依次完成 1080p60 拓扑、真实串流、输入、剪贴板、异常恢复和卸载清理。
+这项结果完成第 1 节和第 2 节的单机基础能力，但不代表第 3 至第 6 节的双机媒体、输入、恢复和长稳通过。
+
+2026-08-01，`192.168.9.26` 使用旧包完成应用、测试证书、PeerSpan IddCx 原型和 LocalSubnet 防火墙安装。SetupAPI 记录设备节点启动；活动 RDP 的 `RdpIdd_IndirectDisplay` 以 `PNP_VetoOutstandingOpen` 拒绝显示拓扑刷新。该旧驱动已退出当前发布路线。
+
+该记录只表示旧包“安装链路通过”，不表示第 2 至第 6 节通过。下一次应安装 VDD 新包，断开占用显示拓扑的 RDP 后，从物理控制台或非 RDP 管理链路启用虚拟屏，再依次完成 1080p60 拓扑、真实串流、输入、剪贴板、异常恢复和卸载清理；不要把重启当作默认步骤。

@@ -81,8 +81,8 @@ export function DisplayView({ snapshot, virtualDisplayBusy, onChangePreferences,
         </section>
       </div>
 
-      {!driverReady && <div className="info-callout"><Info size={18} /><div><strong>虚拟显示器尚未启用</strong><p>“启用虚拟屏”会调用 Windows 软件设备 API，并且只有 IddCx 设备节点真实启动后才会显示就绪。当前诊断：{snapshot.capabilities.virtualDisplay.detail}</p></div></div>}
-      {driverReady && !nativeLinkReady && <div className="info-callout"><Info size={18} /><div><strong>IddCx 虚拟显示器已经真实启动</strong><p>设备会在撤销或 PeerSpan 退出时移除。媒体编码与输入链路尚未同时就绪，因此目前不会把认证控制会话标记为正在串流。</p></div></div>}
+      {!driverReady && <div className="info-callout"><Info size={18} /><div><strong>虚拟显示器尚未启用</strong><p>“启用虚拟屏”会创建由 VirtualDrivers VDD 驱动的软件显示设备；只有设备节点启动且扩展屏进入 Windows 桌面拓扑后才会显示就绪。当前诊断：{snapshot.capabilities.virtualDisplay.detail}</p></div></div>}
+      {driverReady && !nativeLinkReady && <div className="info-callout"><Info size={18} /><div><strong>VirtualDrivers VDD 已经真实启动</strong><p>设备会在撤销或 PeerSpan 退出时移除。媒体编码与输入链路尚未同时就绪，因此目前不会把认证控制会话标记为正在串流。</p></div></div>}
       {session && <div className="info-callout session-callout"><Info size={18} /><div><strong>TLS 1.3 控制通道已认证</strong><p>会话 {session.id.slice(0, 8)} 正在协商 {session.widthPx} × {session.heightPx} · {session.refreshHz} Hz；只有媒体管线确认就绪后才会进入“正在串流”。</p></div></div>}
     </div>
   );

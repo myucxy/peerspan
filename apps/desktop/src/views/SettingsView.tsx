@@ -37,17 +37,12 @@ export function SettingsView({ snapshot, onChangePreferences }: SettingsViewProp
       <div className="settings-layout">
         <div className="settings-stack">
           <section className="preference-card">
-            <div className="preference-heading"><span className="soft-icon"><Gauge size={19} /></span><div><h2>串流核心</h2><p>按会话选择媒体与输入实现</p></div></div>
+            <div className="preference-heading"><span className="soft-icon"><Gauge size={19} /></span><div><h2>串流核心</h2><p>VDD 扩展屏使用成熟的 Sunshine / Moonlight 链路</p></div></div>
             <div className="backend-options" role="radiogroup" aria-label="串流核心">
               <button type="button" role="radio" aria-checked={p.streamingBackend === "sunshineMoonlight"} className={p.streamingBackend === "sunshineMoonlight" ? "selected" : ""} onClick={() => update({ streamingBackend: "sunshineMoonlight" })}>
                 <span>{p.streamingBackend === "sunshineMoonlight" && <CheckCircle2 size={16} />}</span>
-                <div><strong>Sunshine + Moonlight</strong><small>默认 · GameStream、硬件编解码、FEC 与低延迟输入</small></div>
-                <em>推荐</em>
-              </button>
-              <button type="button" role="radio" aria-checked={p.streamingBackend === "native"} className={p.streamingBackend === "native" ? "selected" : ""} onClick={() => update({ streamingBackend: "native" })}>
-                <span>{p.streamingBackend === "native" && <CheckCircle2 size={16} />}</span>
-                <div><strong>PeerSpan 原生</strong><small>D3D11 / Media Foundation 回退与性能对照</small></div>
-                <em>兼容</em>
+                <div><strong>Sunshine + Moonlight</strong><small>GameStream、硬件编解码、FEC 与低延迟输入</small></div>
+                <em>已启用</em>
               </button>
             </div>
           </section>

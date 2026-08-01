@@ -18,6 +18,7 @@ git submodule update --init --recursive
 
 - Sunshine `v2026.516.143833`，源码子模块提交 `14ffa6fdaa53f7b51512be2b3d24f3939695403c`；
 - Moonlight Qt `v6.1.0`，源码子模块提交 `f786e94c7b2f943e24e65d7d74deb539b827fc84`；
-- PeerSpan IddCx 微软派生代码独立按 Microsoft Public License 发布。
+- VirtualDrivers VDD release `25.7.23`，审计源码子模块提交 `d437ebc9b44a14ce6e5cc9c8b7f6beb08d6faf77`，按 MIT 许可证发布；
+- 未进入当前安装包的旧 PeerSpan IddCx 微软派生原型独立按 Microsoft Public License 发布。
 
-安装包中的 `licenses` 目录保留 GPLv3、Sunshine、Moonlight 与 IddCx 许可证。发行安装包时，必须同时发布该提交的源码归档或保持上述仓库及其递归子模块可访问；不得只分发二进制。
+安装包中的 `licenses` 目录保留 GPLv3、Sunshine、Moonlight 与 VirtualDrivers VDD 的许可证。发行安装包时，必须同时发布该提交的源码归档或保持上述仓库及其递归子模块可访问；不得只分发二进制。

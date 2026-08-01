@@ -1,5 +1,7 @@
 # PeerSpan IddCx 驱动原型
 
+> 历史状态：当前发布路径已改用 `third_party/virtual-display-driver` 中固定的 VirtualDrivers VDD 正式签名包；本目录不再由一体化安装包构建或分发，仅保留旧驱动、命名共享纹理和原生媒体实验的可复现源码。新集成说明见 `native/vdd/README.md`。
+
 该目录包含一个可构建的 UMDF 2 间接显示驱动和软件设备控制器。当前原型创建一块稳定标识的虚拟显示器，首选模式为 `1920×1080@60Hz`，并保留 `1600×900@60Hz` 与 `1024×768@60Hz` 回退模式。
 
 驱动交换链线程把最新 `DXGI_FORMAT_B8G8R8A8_UNORM` 帧复制到按分辨率命名的 D3D11 NT 共享纹理（例如 `Global\PeerSpan.Idd.Frame.v1.1920x1080`）。keyed mutex 的 key 0 属于驱动、key 1 属于桌面消费者；驱动使用零超时获取 key 0，上一帧未消费时直接丢弃新帧，绝不阻塞 DWM。共享句柄 ACL 只授权 SYSTEM、管理员和交互式用户，不向网络或匿名主体开放。

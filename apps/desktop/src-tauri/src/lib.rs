@@ -25,7 +25,7 @@ use pairing::{
     DeviceCredentials, PairingOffer, PairingRuntime, fingerprint_public_key, mark_pairing_ready,
     mark_pairing_unavailable,
 };
-use peerspan_core::{AppSnapshot, LocalDevice, PeerSpanCore, Preferences};
+use peerspan_core::{AppSnapshot, LocalDevice, PeerSpanCore, Preferences, StreamingBackend};
 use std::{fs, sync::Arc};
 use tauri::{Manager, State};
 use uuid::Uuid;
@@ -51,6 +51,11 @@ fn update_preferences(
     gamestream: State<'_, Arc<GameStreamRuntime>>,
     preferences: Preferences,
 ) -> Result<AppSnapshot, String> {
+    if preferences.streaming_backend != StreamingBackend::SunshineMoonlight {
+        return Err(
+            "VirtualDrivers VDD is supported through the Sunshine + Moonlight backend only".into(),
+        );
+    }
     let previous = core.snapshot().map_err(|error| error.to_string())?;
     if previous.preferences.launch_at_startup != preferences.launch_at_startup {
         startup::set_launch_at_startup(preferences.launch_at_startup)?;
@@ -146,6 +151,11 @@ pub fn run() {
                 public_key: public_key(&identity),
             };
             let core = Arc::new(PeerSpanCore::load(local_device.clone(), &data_dir)?);
+            let mut preferences = core.snapshot()?.preferences;
+            if preferences.streaming_backend != StreamingBackend::SunshineMoonlight {
+                preferences.streaming_backend = StreamingBackend::SunshineMoonlight;
+                core.update_preferences(preferences)?;
+            }
             probe_video_capability(&core);
             probe_input_capability(&core);
             let resource_dir = app.path().resource_dir().ok();

@@ -25,20 +25,21 @@
 | Visual Studio WDK 组件 | 10.0.26100.16 | `D:\Dev\Env\VisualStudio\Community` | 驱动项目模板、平台工具集与 VS 集成 | `vswhere -requires Component.Microsoft.Windows.DriverKit` |
 | Sunshine 便携核心 | v2026.516.143833 | `D:\Dev\Env\PeerSpan\runtimes\sunshine\Sunshine` | 默认主机捕获、硬件编码、GameStream/FEC 与输入 | `sunshine.exe --version` |
 | Moonlight Qt 便携核心 | v6.1.0 | `D:\Dev\Env\PeerSpan\runtimes\moonlight` | 默认接收端硬解、呈现与低延迟输入 | `Moonlight.exe --version` |
+| VirtualDrivers VDD 正式签名包 | release 25.7.23 / driver 11.30.4.434 | `D:\Dev\Env\PeerSpan\runtimes\virtual-display-driver-25.7.23\VirtualDisplayDriver` | Windows x64 虚拟扩展屏；安装包直接暂存官方签名 INF/CAT/DLL | `Get-AuthenticodeSignature ...\mttvdd.cat` 与 `Get-FileHash ...\MttVDD.dll` |
 
 Windows DPAPI 由操作系统提供，本机身份私钥保护不需要在 `D:\Dev\Env` 追加系统级工具。Rust 绑定由 `windows-sys` 项目依赖锁定并随 Cargo 还原。
 
-Sunshine/Moonlight 官方 Windows x64 便携包缓存于 `D:\Dev\Env\PeerSpan\downloads`。安装包脚本会校验固定 SHA-256 后再暂存，目标机不需要 MSYS2、Qt、FFmpeg 或单独安装 Sunshine/Moonlight。Moonlight 的 `portable.dat` 不进入按机器安装目录，使设置写入当前用户配置而不是只读的 `Program Files`。对应源码以根目录 Git 子模块固定，许可证和源码获取说明随安装包分发。
+VDD、Sunshine 与 Moonlight 官方 Windows x64 包缓存于 `D:\Dev\Env\PeerSpan\downloads`。VDD 缓存文件为 `VirtualDisplayDriver-x86.Driver.Only-25.7.23.zip`（上游文件名虽含 x86，INF 实际为 `NTamd64`），SHA-256 为 `E24210692B442B39AF763536330CE78B423F19342B7A7792C26DE3944E418B3A`；用于源码审计的 `VDD.Control.25.7.23.zip` 也已缓存，SHA-256 为 `A701F2272E9FCF382849B24F913C6DD07597B3B1116525F2E90182F019609154`。安装包脚本会校验固定哈希后暂存，目标机不需要 WDK、MSYS2、Qt、FFmpeg 或单独安装这些组件。Moonlight 的 `portable.dat` 不进入按机器安装目录，使设置写入当前用户配置而不是只读的 `Program Files`。对应源码以根目录 Git 子模块固定，许可证和源码获取说明随安装包分发。
 
 TLS 控制通道使用 `rustls`、`rcgen` 和 `x509-parser`。它们都是由 `Cargo.toml` 与 `Cargo.lock` 锁定、通过 Cargo 还原的项目依赖，不需要在 `D:\Dev\Env` 安装额外的 TLS 库或系统工具；其中 `rustls` 使用项目选定的 `ring` 加密提供程序。
 
-虚拟显示器桌面生命周期使用 Windows 自带的 Software Device 与 Configuration Manager API，Rust 绑定由现有 `windows-sys` 依赖提供，不需要向 `D:\Dev\Env` 添加工具。驱动开发安装脚本会修改系统驱动仓库，选择信任测试证书时还会修改本机证书库，因此不属于常规构建步骤，自动验证不得执行。
+虚拟显示器桌面生命周期使用 Windows 自带的 Software Device 与 Configuration Manager API，Rust 绑定由现有 `windows-sys` 依赖提供。正式签名 VDD 直接使用上述缓存包，不需要为当前发布路径新增 WDK；安装脚本会修改系统驱动仓库和可能修改 `TrustedPublisher`，因此必须显式确认系统变更，普通单元测试不得执行。
 
 媒体数据报核心使用 Cargo 管理的 `chacha20poly1305`、`socket2` 和 `zeroize`，不需要新增系统环境；Windows 套接字缓冲调整仍由操作系统 API 完成。
 
 Windows 视频管线使用 Cargo 管理的 `windows` crate 调用系统自带 D3D11 与 Media Foundation，不需要向 `D:\Dev\Env` 安装额外 SDK。独立探测命令为 `cargo run -p peerspan-video --example probe`；2026-08-01 在当前 Windows 10 22H2 开发机上确认 D3D 11.1、`NVIDIA H.264 Encoder MFT` 与 `Microsoft H264 Video Decoder MFT` 均为 D3D11-aware，并完成 640×360 NV12 → 硬件 H.264 关键帧 → D3D11 解码 NV12 的实机闭环。对应硬件测试可用 `cargo test -p peerspan-video -- --ignored` 重跑。
 
-IddCx/桌面帧交接同样只使用现有 WDK、D3D11 和 Cargo `windows` 绑定，不新增环境。硬件忽略项测试覆盖两个独立 D3D11 设备间的 keyed-mutex NT 共享纹理、GPU BGRA→NV12、硬件编解码、同设备解码纹理→GPU BGRA 和原生 D3D11 交换链首帧呈现；它验证共享契约和无 CPU 读回的接收最后一跳，但不会安装或启动驱动。IddCx 工程已用 1.2 头文件和 build 18362 INF 目标完成 Release x64 构建。
+旧 IddCx/原生媒体实验继续使用现有 WDK、D3D11 和 Cargo `windows` 绑定，不新增环境。硬件忽略项测试覆盖两个独立 D3D11 设备间的 keyed-mutex NT 共享纹理、GPU BGRA→NV12、硬件编解码、同设备解码纹理→GPU BGRA 和原生 D3D11 交换链首帧呈现；它用于性能回归，但不再代表当前 VDD + Sunshine/Moonlight 生产链路。
 
 ## Rust 环境变量
 
@@ -117,7 +118,6 @@ cargo test --workspace -- --ignored
 npm run dev
 npm run build
 npm run build:installer
-pwsh -File native\idd\build.ps1 -Configuration Release -Platform x64
 ```
 
-`npm run build:installer` 使用 Tauri/NSIS 生成 x64 按机器安装包，并把 WebView2 Evergreen 离线安装器、Sunshine/Moonlight 便携核心、PeerSpan IddCx 测试驱动、匹配的测试证书、许可证和防火墙脚本打入同一个 EXE。目标机不需要安装本节中的开发工具。包的内容、测试签名边界和 `192.168.9.26` 验证记录见 [Windows 一体化测试安装包](windows-installer.zh-CN.md)。
+`npm run build:installer` 使用 Tauri/NSIS 生成 x64 按机器安装包，并把 WebView2 Evergreen 离线安装器、Sunshine/Moonlight 便携核心、正式签名 VDD、许可证和防火墙脚本打入同一个 EXE。目标机不需要安装本节中的开发工具。包的内容、签名边界和 `192.168.9.26` 验证记录见 [Windows 一体化安装包](windows-installer.zh-CN.md)。

@@ -1,7 +1,7 @@
 use peerspan_core::{Capability, PeerSpanCore, ScreenEdge};
 use std::sync::{Arc, Mutex};
 
-const INACTIVE_DETAIL: &str = "PeerSpan IddCx virtual display is inactive; install the signed driver and enable it when needed";
+const INACTIVE_DETAIL: &str = "VirtualDrivers VDD is inactive; install the bundled signed driver and enable the virtual screen when needed";
 
 trait DisplayLease: Send {
     fn instance_id(&self) -> &str;
@@ -51,7 +51,7 @@ impl VirtualDisplayRuntime {
                 let _ = self
                     .core
                     .set_virtual_display_capability(Capability::required(format!(
-                        "PeerSpan virtual display remains active, but its layout could not be applied: {error}"
+                        "VirtualDrivers VDD remains active, but its layout could not be applied: {error}"
                     )));
                 return Err(error);
             }
@@ -70,7 +70,7 @@ impl VirtualDisplayRuntime {
                     let _ = self
                         .core
                         .set_virtual_display_capability(Capability::required(format!(
-                            "PeerSpan virtual display is started and retained, but its layout could not be applied: {error}. End the RDP display session or reboot if Windows requests it, then retry"
+                            "VirtualDrivers VDD is started and retained, but its layout could not be applied: {error}. End the RDP display session if it owns the display topology, then retry"
                         )));
                     return Err(error);
                 }
@@ -78,7 +78,7 @@ impl VirtualDisplayRuntime {
             }
             Err(error) => {
                 let detail = format!(
-                    "PeerSpan IddCx virtual display could not start: {error}. Install or enable the signed driver, then retry"
+                    "VirtualDrivers VDD could not start: {error}. Install or repair the bundled signed driver, then retry"
                 );
                 let _ = self
                     .core
@@ -127,7 +127,7 @@ impl VirtualDisplayRuntime {
     fn mark_ready(&self, instance_id: &str) -> Result<(), String> {
         self.core
             .set_virtual_display_capability(Capability::ready(format!(
-                "IddCx virtual display is active and its device node is started ({instance_id})"
+                "VirtualDrivers VDD is active and its device node is started ({instance_id})"
             )))
             .map_err(|error| error.to_string())
     }
@@ -159,8 +159,9 @@ mod platform {
         Win32::Graphics::Gdi::{
             CDS_UPDATEREGISTRY, ChangeDisplaySettingsExW, DEVMODEW, DISP_CHANGE_SUCCESSFUL,
             DISPLAY_DEVICE_ACTIVE, DISPLAY_DEVICE_ATTACHED_TO_DESKTOP,
-            DISPLAY_DEVICE_PRIMARY_DEVICE, DISPLAY_DEVICEW, DM_POSITION, ENUM_CURRENT_SETTINGS,
-            EnumDisplayDevicesW, EnumDisplaySettingsExW,
+            DISPLAY_DEVICE_PRIMARY_DEVICE, DISPLAY_DEVICEW, DM_DISPLAYFREQUENCY, DM_PELSHEIGHT,
+            DM_PELSWIDTH, DM_POSITION, ENUM_CURRENT_SETTINGS, EnumDisplayDevicesW,
+            EnumDisplaySettingsExW,
         },
         core::{HRESULT, PCWSTR},
     };
@@ -231,12 +232,15 @@ mod platform {
 
     impl VirtualDisplayBackend for WindowsVirtualDisplayBackend {
         fn activate(&self) -> Result<Box<dyn DisplayLease>, String> {
-            let enumerator = wide("PeerSpanVirtualDisplay");
+            // The upstream INF intentionally exposes the unrooted `MttVDD` hardware ID for
+            // software-device hosts. Keeping the HSWDEVICE handle gives PeerSpan a reversible
+            // per-session lease without modifying the signed VirtualDrivers package.
+            let enumerator = wide("MttVDD");
             let parent = wide("HTREE\\ROOT\\0");
             let instance = wide("PeerSpanVirtualDisplay");
-            let hardware_ids = multi_sz(&["PeerSpanVirtualDisplay"]);
-            let compatible_ids = multi_sz(&["PeerSpanVirtualDisplay"]);
-            let description = wide("PeerSpan Virtual Display");
+            let hardware_ids = multi_sz(&["MttVDD"]);
+            let compatible_ids = multi_sz(&["MttVDD"]);
+            let description = wide("PeerSpan Virtual Display (VirtualDrivers VDD)");
             let create_info = SW_DEVICE_CREATE_INFO {
                 cbSize: size_of::<SW_DEVICE_CREATE_INFO>() as u32,
                 pszInstanceId: instance.as_ptr(),
@@ -353,8 +357,8 @@ mod platform {
             if adapter.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE != 0 {
                 primary = Some(adapter.DeviceName);
             }
-            let mut matches =
-                contains_peerspan(&adapter.DeviceString) || contains_peerspan(&adapter.DeviceID);
+            let mut matches = contains_vdd_identity(&adapter.DeviceString)
+                || contains_vdd_identity(&adapter.DeviceID);
             for monitor_index in 0..16 {
                 let mut monitor = DISPLAY_DEVICEW {
                     cb: size_of::<DISPLAY_DEVICEW>() as u32,
@@ -366,20 +370,23 @@ mod platform {
                 {
                     break;
                 }
-                matches |= contains_peerspan(&monitor.DeviceString)
-                    || contains_peerspan(&monitor.DeviceID);
+                matches |= contains_vdd_identity(&monitor.DeviceString)
+                    || contains_vdd_identity(&monitor.DeviceID);
             }
             if matches {
                 peerspan = Some(adapter.DeviceName);
             }
         }
         let peerspan = peerspan.ok_or_else(|| {
-            "PeerSpan display has not appeared in the Windows desktop topology".to_owned()
+            "VirtualDrivers VDD has not appeared in the Windows desktop topology".to_owned()
         })?;
         let primary =
             primary.ok_or_else(|| "Windows primary display could not be resolved".to_owned())?;
         let primary_mode = current_mode(&primary)?;
         let mut peerspan_mode = current_mode(&peerspan)?;
+        peerspan_mode.dmPelsWidth = 1920;
+        peerspan_mode.dmPelsHeight = 1080;
+        peerspan_mode.dmDisplayFrequency = 60;
         let primary_position = unsafe { primary_mode.Anonymous1.Anonymous2.dmPosition };
         let (x, y) = match edge {
             ScreenEdge::Left => (
@@ -399,7 +406,7 @@ mod platform {
                 primary_position.y + primary_mode.dmPelsHeight as i32,
             ),
         };
-        peerspan_mode.dmFields |= DM_POSITION;
+        peerspan_mode.dmFields |= DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY;
         peerspan_mode.Anonymous1.Anonymous2.dmPosition.x = x;
         peerspan_mode.Anonymous1.Anonymous2.dmPosition.y = y;
         let result = unsafe {
@@ -415,7 +422,7 @@ mod platform {
             Ok(())
         } else {
             Err(format!(
-                "Windows rejected the PeerSpan display position with status {result}"
+                "Windows rejected the VDD display position with status {result}"
             ))
         }
     }
@@ -435,14 +442,36 @@ mod platform {
         }
     }
 
-    fn contains_peerspan(value: &[u16]) -> bool {
+    fn contains_vdd_identity(value: &[u16]) -> bool {
         let end = value
             .iter()
             .position(|unit| *unit == 0)
             .unwrap_or(value.len());
-        String::from_utf16_lossy(&value[..end])
-            .to_ascii_lowercase()
-            .contains("peerspan")
+        let value = String::from_utf16_lossy(&value[..end]).to_ascii_lowercase();
+        value.contains("mttvdd") || value.contains("virtual display driver")
+    }
+
+    #[cfg(test)]
+    pub(super) fn active_vdd_mode() -> Result<(u32, u32, u32), String> {
+        for index in 0..32 {
+            let mut adapter = DISPLAY_DEVICEW {
+                cb: size_of::<DISPLAY_DEVICEW>() as u32,
+                ..Default::default()
+            };
+            if unsafe { EnumDisplayDevicesW(ptr::null(), index, &mut adapter, 0) } == 0 {
+                break;
+            }
+            if adapter.StateFlags & (DISPLAY_DEVICE_ACTIVE | DISPLAY_DEVICE_ATTACHED_TO_DESKTOP)
+                == 0
+                || (!contains_vdd_identity(&adapter.DeviceString)
+                    && !contains_vdd_identity(&adapter.DeviceID))
+            {
+                continue;
+            }
+            let mode = current_mode(&adapter.DeviceName)?;
+            return Ok((mode.dmPelsWidth, mode.dmPelsHeight, mode.dmDisplayFrequency));
+        }
+        Err("an active VDD adapter was not found".into())
     }
 
     fn wait_for_creation(context: &CallbackContext) -> Result<CreationResult, String> {
@@ -590,7 +619,7 @@ mod tests {
 
     impl DisplayLease for FakeLease {
         fn instance_id(&self) -> &str {
-            "SWD\\PeerSpanVirtualDisplay\\test"
+            "SWD\\MttVDD\\PeerSpanVirtualDisplay"
         }
     }
 
@@ -775,5 +804,33 @@ mod tests {
         assert_eq!(drops.load(Ordering::Relaxed), 1);
         drop(runtime);
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "modifies the live Windows display topology and requires the signed VDD package"]
+    fn signed_vdd_enters_the_windows_desktop_topology() {
+        let backend = platform::backend();
+        let lease = backend
+            .activate()
+            .expect("the signed VirtualDrivers VDD software device should start");
+        assert!(
+            lease
+                .instance_id()
+                .eq_ignore_ascii_case("SWD\\MttVDD\\PeerSpanVirtualDisplay")
+        );
+        backend
+            .position(ScreenEdge::Right)
+            .expect("the VDD monitor should enter the desktop topology and move right of primary");
+        let mode = platform::active_vdd_mode().expect("the active VDD mode should be readable");
+        assert_eq!(mode, (1920, 1080, 60));
+        eprintln!(
+            "verified {} at {}x{}@{} Hz",
+            lease.instance_id(),
+            mode.0,
+            mode.1,
+            mode.2
+        );
+        drop(lease);
     }
 }

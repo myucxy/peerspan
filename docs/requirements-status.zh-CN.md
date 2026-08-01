@@ -1,6 +1,6 @@
 # PeerSpan 需求与实现状态
 
-更新日期：2026-08-01
+更新日期：2026-08-02
 
 本文把已确认的产品需求映射到当前代码和验证结果。只有接入真实系统能力并通过相应测试的项目才标记为“已完成”；仅有 UI 或接口边界的项目不视为完成。
 
@@ -13,24 +13,24 @@
 | 局域网自动发现 | 已完成 | `_peerspan._tcp.local.` mDNS、协议 v5 与 2 秒轮询；发布控制端口 `37622` 和配对端口 `37621`，双本地守护进程实测互相发现 |
 | 安全配对引导 | 已完成 | 六位代码、SPAKE2、XChaCha20-Poly1305、Ed25519 签名身份交换；双端持久化集成测试通过 |
 | DPI/缩放坐标映射 | 已完成 | 归一化内容坐标、边界钳制和不同 DPI 往返测试 |
-| IddCx 1080p60 虚拟显示器 | 进行中 | 单屏驱动、构建/CAT/测试签名、`SwDeviceCreate` 生命周期与 `DN_STARTED` 校验均已实现；拓扑布局失败时现在保留已启动的 Software Device 租约并允许重试，不再将设备释放成 phantom。一体化包已在 `192.168.9.26` 成功暂存驱动并启动设备；活动 RDP 仍以 `PNP_VetoOutstandingOpen` 阻止显示栈刷新且 Windows 要求重启，故桌面拓扑中的 1080p60 显示器仍未验收 |
-| D3D11 帧获取和硬件编码 | 进行中 | IddCx 零等待 keyed-mutex 发布、GPU 本地复制、GPU NV12 转换、NVIDIA H.264 硬编和 Windows 硬解闭环均已实机通过；真实 IddCx 帧的最后一跳等待 `192.168.9.26` 重启后验收 |
-| 认证媒体与长期控制通道 | 已完成 | 协议 v5 双向 TLS 1.3 继续负责身份、授权、心跳、剪贴板和清理；默认媒体协商启动 Sunshine/Moonlight GameStream，PIN 通过已认证会话协调，媒体不再重复套 PeerSpan UDP；原生 exporter/AEAD UDP 路径保留为回退与 A/B 对照 |
-| 远端解码显示与输入回传 | 已完成 | 默认由 Moonlight 硬解/呈现并把输入直接交给 Sunshine；命令参数按独立参数构造、固定硬解/H.264/绝对鼠标与系统键捕获，进程超时、日志和异常清理已接入。原生 Win32/D3D11/`SendInput` 路径仍可选择 |
+| IddCx 1080p60 虚拟显示器 | 已完成 | 已替换为 VirtualDrivers VDD `25.7.23` 正式签名包；`SwDeviceCreate` 使用上游 `MttVDD` 硬件 ID，只有 `DN_STARTED`、桌面拓扑出现和布局成功后才就绪。Windows 10 build 19045 本机实测设备进入桌面并强制为 `1920×1080@60`，释放后移除；安装→完整卸载→重装后复测仍通过 |
+| 显示捕获和硬件编码 | 进行中 | 生产路径改为 Sunshine 捕获 VDD 扩展屏并硬件编码，Moonlight 硬解呈现；现有 D3D11/Media Foundation 硬件闭环仍作回归测试。VDD 实际画面跨机最后一跳和 1080p60 长稳仍待双机验收 |
+| 认证媒体与长期控制通道 | 已完成 | 协议 v5 双向 TLS 1.3 负责身份、授权、心跳、后端协商、PIN、剪贴板和清理；媒体使用 Sunshine/Moonlight GameStream，不重复套 PeerSpan UDP。旧原生 UDP 实现只保留为代码级实验，不再出现在 UI 或生产配置中 |
+| 远端解码显示与输入回传 | 已完成 | Moonlight 硬解/呈现并把输入直接交给 Sunshine；命令参数按独立参数构造、固定硬解/H.264/绝对鼠标与系统键捕获，进程超时、日志和异常清理已接入 |
 | 文本剪贴板 | 已完成 | 双向认证 TLS 文本同步、1 MiB 上限、修订号去重和本机写入循环抑制；不传图片、富文本或文件 |
 | 断连清理与窗口恢复 | 已完成 | 1 秒链路失活判断、媒体/窗口/输入资源清理、虚拟屏遗留窗口回迁主屏，以及前端每 2 秒随发现状态持续自动重连均已实现 |
-| Release 桌面构建与安装 | 已完成 | `npm run build` 生成桌面程序；`npm run build:installer` 生成包含 Sunshine/Moonlight、许可证/源码说明、PeerSpan 驱动、测试证书、防火墙规则和 WebView2 离线运行时的一体化 NSIS 包；旧版安装链路已在 `192.168.9.26` 通过，新核心版本仍需重启后做双机验收 |
+| Release 桌面构建与安装 | 已完成 | 完整 NSIS 包已生成并在本机静默覆盖安装返回 0；包内固定正式签名 VDD、Sunshine/Moonlight、许可证、源码说明、防火墙和 WebView2。驱动包/证书/配置所有权感知卸载已做完整循环，四条规则确认为 Domain/Private + LocalSubnet，安装后的桌面程序成功启动 |
 
 ## 后续里程碑
 
 - 窗口模式：远端代理窗口、生命周期同步、跨边缘交互和焦点仲裁。
 - 应用节点模式：Node Service、用户会话 Agent、应用目录、远程启动和 ConPTY。
-- 生产安全：DPAPI 私钥保护已完成；驱动生产签名与升级、权限隔离和安全审计仍待完成。
+- 生产安全：DPAPI 私钥保护与正式签名 VDD 替换已完成；应用安装器代码签名、权限隔离和完整安全审计仍待完成。
 - 质量目标：Windows 10/11 兼容矩阵、1080p60 稳定性、端到端延迟低于 80 ms、异常网络恢复和长时间运行测试。
 
 ## 外部验收边界
 
-当前开发机未安装 PeerSpan 测试驱动，构建和普通测试不会自动修改本机证书或驱动状态。专用机 `192.168.9.26` 已完成一体化包的应用、驱动、证书和防火墙安装，但活动 RDP 阻止显示拓扑刷新且 Windows 要求重启。因此“真实 IddCx 帧跨两台电脑”和 Windows 10/11 驱动矩阵仍必须按 [Windows 专用机验收手册](windows-acceptance.zh-CN.md) 完成，不能用设备安装成功或模拟画面替代。
+旧 PeerSpan 测试驱动不再属于当前发布路线。Windows 10 build 19045 本机已经完成 VDD 安装、`DN_STARTED`、桌面拓扑、`1920×1080@60`、释放、卸载、重装和 NSIS 覆盖安装验证；`192.168.9.26` 的旧 RDP 记录仍只证明历史安装链路。“真实 VDD 画面跨两台电脑”和完整 Windows 10/11 矩阵仍必须按 [Windows 专用机验收手册](windows-acceptance.zh-CN.md) 完成，不能用本机设备成功或模拟画面替代。
 
 ## 提交前验证命令
 
@@ -47,5 +47,4 @@ npm test
 npm run build:web
 npm run build
 npm run build:installer
-pwsh -File native\idd\build.ps1 -Configuration Release -Platform x64
 ```

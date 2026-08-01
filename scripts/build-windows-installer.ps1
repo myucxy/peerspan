@@ -35,46 +35,67 @@ foreach ($resolvedPath in @($resolvedStageRoot, $resolvedGameStreamStageRoot)) {
     }
 }
 
-& (Join-Path $repositoryRoot "native\idd\build.ps1") `
-    -Configuration $Configuration `
-    -Platform $Platform
-if ($LASTEXITCODE -ne 0) {
-    throw "PeerSpan IddCx build failed with exit code $LASTEXITCODE."
+$gameStreamEnvironmentRoot = "D:\Dev\Env\PeerSpan"
+$downloadRoot = Join-Path $gameStreamEnvironmentRoot "downloads"
+$runtimeRoot = Join-Path $gameStreamEnvironmentRoot "runtimes"
+New-Item -ItemType Directory -Path $downloadRoot -Force | Out-Null
+New-Item -ItemType Directory -Path $runtimeRoot -Force | Out-Null
+
+$vddPackage = @{
+    Name = "VirtualDrivers VDD"
+    Release = "25.7.23"
+    DriverVersion = "11.30.4.434"
+    Archive = Join-Path $downloadRoot "VirtualDisplayDriver-x86.Driver.Only-25.7.23.zip"
+    Uri = "https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/download/25.7.23/VirtualDisplayDriver-x86.Driver.Only.zip"
+    Sha256 = "E24210692B442B39AF763536330CE78B423F19342B7A7792C26DE3944E418B3A"
+    Runtime = Join-Path $runtimeRoot "virtual-display-driver-25.7.23"
+    PackageDirectory = "VirtualDisplayDriver"
+}
+if (-not (Test-Path -LiteralPath $vddPackage.Archive -PathType Leaf)) {
+    Write-Output "Downloading $($vddPackage.Name) $($vddPackage.Release) to $($vddPackage.Archive)..."
+    Invoke-WebRequest -Uri $vddPackage.Uri -OutFile $vddPackage.Archive
+}
+$vddArchiveHash = (Get-FileHash -LiteralPath $vddPackage.Archive -Algorithm SHA256).Hash
+if ($vddArchiveHash -ne $vddPackage.Sha256) {
+    throw "$($vddPackage.Name) archive hash mismatch. Expected $($vddPackage.Sha256), received $vddArchiveHash."
+}
+$vddRuntimePackage = Join-Path $vddPackage.Runtime $vddPackage.PackageDirectory
+if (-not (Test-Path -LiteralPath (Join-Path $vddRuntimePackage "MttVDD.inf") -PathType Leaf)) {
+    New-Item -ItemType Directory -Path $vddPackage.Runtime -Force | Out-Null
+    Expand-Archive -LiteralPath $vddPackage.Archive -DestinationPath $vddPackage.Runtime -Force
 }
 
 if (Test-Path -LiteralPath $resolvedStageRoot) {
     Remove-Item -LiteralPath $resolvedStageRoot -Recurse -Force
 }
 
-$stagedRelease = Join-Path $resolvedStageRoot "$Platform\$Configuration"
-$stagedPackage = Join-Path $stagedRelease "PeerSpanIdd"
+$stagedPackage = Join-Path $resolvedStageRoot "package"
 New-Item -ItemType Directory -Path $stagedPackage -Force | Out-Null
 
-$driverOutput = Join-Path $repositoryRoot "native\idd\$Platform\$Configuration"
 $files = @(
     @{
-        Source = Join-Path $repositoryRoot "native\idd\install-dev.ps1"
-        Destination = Join-Path $resolvedStageRoot "install-dev.ps1"
+        Source = Join-Path $repositoryRoot "native\vdd\install.ps1"
+        Destination = Join-Path $resolvedStageRoot "install.ps1"
     },
     @{
-        Source = Join-Path $repositoryRoot "native\idd\uninstall-dev.ps1"
-        Destination = Join-Path $resolvedStageRoot "uninstall-dev.ps1"
+        Source = Join-Path $repositoryRoot "native\vdd\uninstall.ps1"
+        Destination = Join-Path $resolvedStageRoot "uninstall.ps1"
     },
     @{
-        Source = Join-Path $driverOutput "PeerSpanIdd.cer"
-        Destination = Join-Path $stagedRelease "PeerSpanIdd.cer"
+        Source = Join-Path $vddRuntimePackage "MttVDD.inf"
+        Destination = Join-Path $stagedPackage "MttVDD.inf"
     },
     @{
-        Source = Join-Path $driverOutput "PeerSpanIdd\PeerSpanIdd.inf"
-        Destination = Join-Path $stagedPackage "PeerSpanIdd.inf"
+        Source = Join-Path $vddRuntimePackage "mttvdd.cat"
+        Destination = Join-Path $stagedPackage "mttvdd.cat"
     },
     @{
-        Source = Join-Path $driverOutput "PeerSpanIdd\peerspanidd.cat"
-        Destination = Join-Path $stagedPackage "peerspanidd.cat"
+        Source = Join-Path $vddRuntimePackage "MttVDD.dll"
+        Destination = Join-Path $stagedPackage "MttVDD.dll"
     },
     @{
-        Source = Join-Path $driverOutput "PeerSpanIdd\PeerSpanIdd.dll"
-        Destination = Join-Path $stagedPackage "PeerSpanIdd.dll"
+        Source = Join-Path $vddRuntimePackage "vdd_settings.xml"
+        Destination = Join-Path $stagedPackage "vdd_settings.xml"
     }
 )
 
@@ -85,11 +106,6 @@ foreach ($file in $files) {
     Copy-Item -LiteralPath $file.Source -Destination $file.Destination -Force
 }
 
-$gameStreamEnvironmentRoot = "D:\Dev\Env\PeerSpan"
-$downloadRoot = Join-Path $gameStreamEnvironmentRoot "downloads"
-$runtimeRoot = Join-Path $gameStreamEnvironmentRoot "runtimes"
-New-Item -ItemType Directory -Path $downloadRoot -Force | Out-Null
-New-Item -ItemType Directory -Path $runtimeRoot -Force | Out-Null
 $runtimePackages = @(
     @{
         Name = "Sunshine"
@@ -145,7 +161,7 @@ if (Test-Path -LiteralPath $portableMarker -PathType Leaf) {
 Copy-Item -LiteralPath (Join-Path $repositoryRoot "LICENSE") -Destination (Join-Path $stagedLicenses "PeerSpan-GPLv3.txt") -Force
 Copy-Item -LiteralPath (Join-Path $repositoryRoot "third_party\sunshine\LICENSE") -Destination (Join-Path $stagedLicenses "Sunshine-GPLv3.txt") -Force
 Copy-Item -LiteralPath (Join-Path $repositoryRoot "third_party\moonlight-qt\LICENSE") -Destination (Join-Path $stagedLicenses "Moonlight-GPLv3.txt") -Force
-Copy-Item -LiteralPath (Join-Path $repositoryRoot "native\idd\LICENSE.MS-PL") -Destination (Join-Path $stagedLicenses "PeerSpan-IddCx-MS-PL.txt") -Force
+Copy-Item -LiteralPath (Join-Path $repositoryRoot "third_party\virtual-display-driver\LICENSE") -Destination (Join-Path $stagedLicenses "VirtualDrivers-VDD-MIT.txt") -Force
 Copy-Item -LiteralPath (Join-Path $repositoryRoot "THIRD_PARTY_NOTICES.md") -Destination (Join-Path $stagedLicenses "THIRD_PARTY_NOTICES.md") -Force
 Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\source-code-offer.zh-CN.md") -Destination (Join-Path $resolvedGameStreamStageRoot "SOURCE_CODE.zh-CN.md") -Force
 
@@ -176,7 +192,11 @@ $resourceManifest = [ordered]@{
     builtAtUtc = [DateTime]::UtcNow.ToString("o")
     platform = $Platform
     configuration = $Configuration
-    testSignedDriver = $true
+    testSignedDriver = $false
+    vddRelease = $vddPackage.Release
+    vddDriverVersion = $vddPackage.DriverVersion
+    vddArchiveSha256 = $vddPackage.Sha256
+    vddSourceCommit = "d437ebc9b44a14ce6e5cc9c8b7f6beb08d6faf77"
     webview2InstallMode = "offlineInstaller"
     sunshineVersion = $runtimePackages[0].Version
     moonlightVersion = $runtimePackages[1].Version
@@ -220,7 +240,10 @@ $artifactManifest = [ordered]@{
     artifact = $installer.Name
     bytes = $installer.Length
     sha256 = $installerHash.Hash
-    testSignedDriver = $true
+    testSignedDriver = $false
+    vddRelease = $vddPackage.Release
+    vddDriverVersion = $vddPackage.DriverVersion
+    vddArchiveSha256 = $vddPackage.Sha256
     webview2InstallMode = "offlineInstaller"
     sunshineVersion = $runtimePackages[0].Version
     moonlightVersion = $runtimePackages[1].Version
