@@ -24,6 +24,8 @@
 | Windows Driver Kit | 10.1.26100.6584 | `C:\Program Files (x86)\Windows Kits\10` | IddCx 间接显示驱动开发 | 检查 `Include\10.0.26100.0\um\iddcx\1.4\IddCx.h` 与 `build\10.0.26100.0` |
 | Visual Studio WDK 组件 | 10.0.26100.16 | `D:\Dev\Env\VisualStudio\Community` | 驱动项目模板、平台工具集与 VS 集成 | `vswhere -requires Component.Microsoft.Windows.DriverKit` |
 
+Windows DPAPI 由操作系统提供，本机身份私钥保护不需要在 `D:\Dev\Env` 追加系统级工具。Rust 绑定由 `windows-sys` 项目依赖锁定并随 Cargo 还原。
+
 ## Rust 环境变量
 
 当前 Rust 使用项目外的固定目录：

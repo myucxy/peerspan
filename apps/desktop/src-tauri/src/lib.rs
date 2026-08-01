@@ -1,26 +1,17 @@
 mod discovery;
+mod identity;
 mod pairing;
 
 use discovery::{DiscoveryRuntime, mark_discovery_ready, mark_discovery_unavailable};
-use ed25519_dalek::SigningKey;
+use identity::{DeviceIdentity, load_or_create_identity};
 use pairing::{
     DeviceCredentials, PairingOffer, PairingRuntime, fingerprint_public_key, mark_pairing_ready,
     mark_pairing_unavailable,
 };
 use peerspan_core::{AppSnapshot, LocalDevice, PeerSpanCore, Preferences};
-use rand_core::OsRng;
-use serde::{Deserialize, Serialize};
-use std::{fs, io, path::Path, sync::Arc};
+use std::{fs, sync::Arc};
 use tauri::{Manager, State};
 use uuid::Uuid;
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct StoredIdentity {
-    device_id: Uuid,
-    #[serde(default)]
-    signing_key_hex: String,
-}
 
 #[tauri::command]
 fn get_app_snapshot(core: State<'_, Arc<PeerSpanCore>>) -> Result<AppSnapshot, String> {
@@ -64,63 +55,12 @@ fn pair_device(
     runtime.pair_device(peer_id, &code)
 }
 
-fn load_or_create_identity(data_dir: &Path) -> Result<StoredIdentity, Box<dyn std::error::Error>> {
-    let path = data_dir.join("identity.json");
-    match fs::read(&path) {
-        Ok(bytes) => {
-            let mut identity: StoredIdentity = serde_json::from_slice(&bytes)?;
-            if decode_signing_key(&identity.signing_key_hex).is_err() {
-                identity.signing_key_hex = generate_signing_key_hex();
-                persist_identity(&path, &identity)?;
-            }
-            Ok(identity)
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let identity = StoredIdentity {
-                device_id: Uuid::new_v4(),
-                signing_key_hex: generate_signing_key_hex(),
-            };
-            persist_identity(&path, &identity)?;
-            Ok(identity)
-        }
-        Err(error) => Err(error.into()),
-    }
+fn fingerprint(identity: &DeviceIdentity) -> String {
+    fingerprint_public_key(&identity.signing_key.verifying_key().to_bytes())
 }
 
-fn generate_signing_key_hex() -> String {
-    hex::encode(SigningKey::generate(&mut OsRng).to_bytes())
-}
-
-fn decode_signing_key(value: &str) -> Result<SigningKey, io::Error> {
-    let bytes = hex::decode(value)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "identity key is not hex"))?;
-    let bytes: [u8; 32] = bytes
-        .try_into()
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "identity key has wrong length"))?;
-    Ok(SigningKey::from_bytes(&bytes))
-}
-
-fn persist_identity(
-    path: &Path,
-    identity: &StoredIdentity,
-) -> Result<(), Box<dyn std::error::Error>> {
-    fs::write(path, serde_json::to_vec_pretty(identity)?)?;
-    Ok(())
-}
-
-fn fingerprint(identity: &StoredIdentity) -> Result<String, io::Error> {
-    let signing_key = decode_signing_key(&identity.signing_key_hex)?;
-    Ok(fingerprint_public_key(
-        &signing_key.verifying_key().to_bytes(),
-    ))
-}
-
-fn public_key(identity: &StoredIdentity) -> Result<String, io::Error> {
-    Ok(hex::encode(
-        decode_signing_key(&identity.signing_key_hex)?
-            .verifying_key()
-            .to_bytes(),
-    ))
+fn public_key(identity: &DeviceIdentity) -> String {
+    hex::encode(identity.signing_key.verifying_key().to_bytes())
 }
 
 pub fn run() {
@@ -134,13 +74,13 @@ pub fn run() {
                 id: identity.device_id,
                 name,
                 platform: format!("Windows · {}", std::env::consts::ARCH),
-                fingerprint: fingerprint(&identity)?,
-                public_key: public_key(&identity)?,
+                fingerprint: fingerprint(&identity),
+                public_key: public_key(&identity),
             };
             let core = Arc::new(PeerSpanCore::load(local_device.clone(), &data_dir)?);
             let credentials = DeviceCredentials {
                 device: local_device.clone(),
-                signing_key: decode_signing_key(&identity.signing_key_hex)?,
+                signing_key: identity.signing_key,
             };
             match PairingRuntime::start(credentials, Arc::clone(&core)) {
                 Ok(runtime) => {
@@ -177,13 +117,13 @@ mod tests {
 
     #[test]
     fn fingerprint_is_derived_from_public_key_and_grouped() {
-        let identity = StoredIdentity {
+        let identity = DeviceIdentity {
             device_id: Uuid::nil(),
-            signing_key_hex: hex::encode([7_u8; 32]),
+            signing_key: ed25519_dalek::SigningKey::from_bytes(&[7_u8; 32]),
         };
-        let value = fingerprint(&identity).unwrap();
+        let value = fingerprint(&identity);
         assert_eq!(value.len(), 29);
         assert_eq!(value.split(' ').count(), 6);
-        assert_eq!(value, fingerprint(&identity).unwrap());
+        assert_eq!(value, fingerprint(&identity));
     }
 }
