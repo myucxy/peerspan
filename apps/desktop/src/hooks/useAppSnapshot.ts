@@ -50,5 +50,5 @@ export function useAppSnapshot() {
     }
   }, [snapshot]);
 
-  return { snapshot, loading, scanning, error, scan, updatePreferences };
+  return { snapshot, loading, scanning, error, scan, updatePreferences, replaceSnapshot: setSnapshot };
 }

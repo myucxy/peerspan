@@ -67,11 +67,50 @@ export interface DisplaySession {
   latencyMs?: number;
 }
 
+export interface DisplayLayout {
+  peerId: string;
+  x: number;
+  y: number;
+}
+
+export type ApplicationKind = "gui" | "terminal";
+export type ApplicationSource = "manual" | "startMenu";
+
+export interface PublishedApplication {
+  id: string;
+  name: string;
+  launchTarget: string;
+  arguments: string;
+  workingDirectory?: string;
+  kind: ApplicationKind;
+  source: ApplicationSource;
+  enabled: boolean;
+  updatedAtUnixMs: number;
+}
+
+export interface ApplicationSummary {
+  id: string;
+  name: string;
+  kind: ApplicationKind;
+}
+
+export interface ApplicationCatalog {
+  deviceId: string;
+  deviceName: string;
+  revision: number;
+  updatedAtUnixMs: number;
+  applications: ApplicationSummary[];
+}
+
 export interface AppSnapshot {
   localDevice: LocalDevice;
   nearbyDevices: PeerDevice[];
   trustedDevices: PeerDevice[];
-  activeSession?: DisplaySession;
+  displaySessions: DisplaySession[];
+  displayLayouts: DisplayLayout[];
+  localApplications: PublishedApplication[];
+  localCatalogRevision: number;
+  applicationCatalogs: ApplicationCatalog[];
   preferences: Preferences;
   capabilities: RuntimeCapabilities;
 }

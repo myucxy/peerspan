@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub const PROTOCOL_VERSION: u16 = 5;
+pub const PROTOCOL_VERSION: u16 = 6;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
@@ -18,6 +18,29 @@ pub enum ControlMessage {
     Input(InputEvent),
     ClipboardText(ClipboardText),
     Heartbeat(Heartbeat),
+    ApplicationCatalogExchange(ApplicationCatalogExchange),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApplicationCatalogExchange {
+    pub device_id: Uuid,
+    pub revision: u64,
+    pub applications: Vec<ApplicationDescriptor>,
+    pub continue_control: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApplicationDescriptor {
+    pub id: Uuid,
+    pub name: String,
+    pub kind: ApplicationKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApplicationKind {
+    Gui,
+    Terminal,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -201,5 +224,24 @@ mod tests {
         let decoded: ControlMessage = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, message);
         assert!(json.contains(&session_id.to_string()));
+    }
+
+    #[test]
+    fn application_catalog_exchange_round_trips_without_launch_secrets() {
+        let message = ControlMessage::ApplicationCatalogExchange(ApplicationCatalogExchange {
+            device_id: Uuid::new_v4(),
+            revision: 42,
+            applications: vec![ApplicationDescriptor {
+                id: Uuid::new_v4(),
+                name: "Design Tool".into(),
+                kind: ApplicationKind::Gui,
+            }],
+            continue_control: false,
+        });
+        let json = serde_json::to_string(&message).unwrap();
+        let decoded: ControlMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, message);
+        assert!(!json.contains("launch_target"));
+        assert!(!json.contains("arguments"));
     }
 }

@@ -1,6 +1,6 @@
 # PeerSpan 开发环境
 
-更新日期：2026-08-01
+更新日期：2026-08-02
 
 ## 环境约定
 
@@ -32,6 +32,8 @@ Windows DPAPI 由操作系统提供，本机身份私钥保护不需要在 `D:\D
 VDD、Sunshine 与 Moonlight 官方 Windows x64 包缓存于 `D:\Dev\Env\PeerSpan\downloads`。VDD 缓存文件为 `VirtualDisplayDriver-x86.Driver.Only-25.7.23.zip`（上游文件名虽含 x86，INF 实际为 `NTamd64`），SHA-256 为 `E24210692B442B39AF763536330CE78B423F19342B7A7792C26DE3944E418B3A`；用于源码审计的 `VDD.Control.25.7.23.zip` 也已缓存，SHA-256 为 `A701F2272E9FCF382849B24F913C6DD07597B3B1116525F2E90182F019609154`。安装包脚本会校验固定哈希后暂存，目标机不需要 WDK、MSYS2、Qt、FFmpeg 或单独安装这些组件。Moonlight 的 `portable.dat` 不进入按机器安装目录，使设置写入当前用户配置而不是只读的 `Program Files`。对应源码以根目录 Git 子模块固定，许可证和源码获取说明随安装包分发。
 
 TLS 控制通道使用 `rustls`、`rcgen` 和 `x509-parser`。它们都是由 `Cargo.toml` 与 `Cargo.lock` 锁定、通过 Cargo 还原的项目依赖，不需要在 `D:\Dev\Env` 安装额外的 TLS 库或系统工具；其中 `rustls` 使用项目选定的 `ring` 加密提供程序。
+
+应用扫描的稳定身份使用 `uuid` 的 v5 功能及其 Cargo 依赖 `sha1_smol`。它只用于从开始菜单路径生成可重复 UUID，不用于密码学或传输安全；属于项目依赖，不需要在 `D:\Dev\Env` 安装额外工具。2026-08-02 首次还原缺失 Cargo 缓存时使用了本文末尾的临时 HTTP/HTTPS 代理，未修改系统代理或项目配置。
 
 虚拟显示器桌面生命周期使用 Windows 自带的 Software Device 与 Configuration Manager API，Rust 绑定由现有 `windows-sys` 依赖提供。正式签名 VDD 直接使用上述缓存包，不需要为当前发布路径新增 WDK；安装脚本会修改系统驱动仓库和可能修改 `TrustedPublisher`，因此必须显式确认系统变更，普通单元测试不得执行。
 

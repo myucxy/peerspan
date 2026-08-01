@@ -30,11 +30,15 @@ peerspan/
 
 已实现桌面 UI、Web 设计预览、Tauri 命令桥、本机身份与可信设备持久化、偏好持久化、协议基础类型、配对码保护、TLS 控制通道和 DPI 归一化坐标规则。
 
-局域网发现使用 `_peerspan._tcp.local.` mDNS 服务，桌面端每 2 秒刷新一次协议 v5 兼容节点。mDNS 的主服务端口为 TLS 控制端口 `37622`，TXT 记录另外发布配对端口 `37621`。配对引导使用 120 秒有效的六位代码和 SPAKE2 协商共享秘密，以 XChaCha20-Poly1305 保护身份交换，并用 Ed25519 签名验证持久设备身份；单次配对邀请最多允许 5 次尝试。发现测试和本机双端配对测试均已通过。
+局域网发现使用 `_peerspan._tcp.local.` mDNS 服务，桌面端每 2 秒刷新一次协议 v6 兼容节点。mDNS 的主服务端口为 TLS 控制端口 `37622`，TXT 记录另外发布配对端口 `37621`。配对引导使用 120 秒有效的六位代码和 SPAKE2 协商共享秘密，以 XChaCha20-Poly1305 保护身份交换，并用 Ed25519 签名验证持久设备身份；单次配对邀请最多允许 5 次尝试。发现测试和本机双端配对测试均已通过。
 
-长期控制通道仅启用 TLS 1.3，ALPN 为 `peerspan-control/5`。客户端和服务端都使用本机长期 Ed25519 身份签发的自签名证书，并按配对时保存的 Ed25519 公钥固定证书 SPKI；服务端在每次握手时读取最新可信设备列表，因此未配对或已撤销的客户端会在 TLS 握手阶段被拒绝。TLS 建立后，协议 Hello 还会再次核对协议版本、设备 UUID、指纹和证书公钥，防止发现记录或应用层身份与证书错配。
+长期控制通道仅启用 TLS 1.3，ALPN 为 `peerspan-control/6`。客户端和服务端都使用本机长期 Ed25519 身份签发的自签名证书，并按配对时保存的 Ed25519 公钥固定证书 SPKI；服务端在每次握手时读取最新可信设备列表，因此未配对或已撤销的客户端会在 TLS 握手阶段被拒绝。TLS 建立后，协议 Hello 还会再次核对协议版本、设备 UUID、指纹和证书公钥，防止发现记录或应用层身份与证书错配。
 
-当前 v5 控制会话支持 Display Offer/Decision、串流后端协商、500 ms 心跳、往返延迟统计、Stream Ready、剪贴板、主动 Session End 和双端清理。核心层只允许一个活动显示会话并限制状态合法迁移。默认后端下，发送端启动 Sunshine 并绑定 PeerSpan 虚拟显示器，接收端启动 Moonlight；Moonlight 的四位 PIN 由已认证 TLS 会话传回发送端，再提交给 Sunshine 本机 HTTPS API。Moonlight 硬解窗口稳定启动后发送 Stream Ready，双方进入 `Streaming`。GameStream 媒体与输入直接走 Sunshine/Moonlight，不重复封装到 PeerSpan UDP。
+当前 v6 控制连接在 Hello 后先双向交换应用目录，再按需进入 Display Offer/Decision、串流后端协商、500 ms 心跳、往返延迟统计、Stream Ready、剪贴板、主动 Session End 和双端清理。目录同步连接交换完成后即可关闭，无需创建屏幕会话。核心层允许不同 peer 同时活动，每个 peer 最多一条、全局最多 8 条，并限制各会话状态合法迁移。默认后端下，发送端启动共享 Sunshine 主机并绑定 PeerSpan 虚拟显示器，每个接收端启动独立 Moonlight 进程；Moonlight 的四位 PIN 由对应认证 TLS 会话传回发送端，再提交给 Sunshine 本机 HTTPS API。Moonlight 硬解窗口稳定启动后发送 Stream Ready，对应双方进入 `Streaming`。GameStream 媒体与输入直接走 Sunshine/Moonlight，不重复封装到 PeerSpan UDP。
+
+应用目录分为本机私有 `PublishedApplication` 与远端安全 `ApplicationSummary`。私有记录包含启动目标、参数和工作目录并持久化到 `published-applications.json`；跨机协议只包含 UUID、显示名称和 GUI/终端类型。Windows 扫描器递归读取用户及全局开始菜单快捷方式，以规范化路径生成 UUID v5，手工记录优先于同 ID 扫描结果。远端目录限制 512 项，必须绑定 TLS 已认证 peer，单项名称限制 128 字符。
+
+屏幕空间布局以 peer ID、x、y 持久化到 `display-layouts.json`。它描述 PeerSpan 多会话 UI 中的相对位置，不会假定 VDD 必须为每个 peer 创建一个软件设备；当前发送端可让一个 Sunshine/VDD 桌面同时服务多个接收节点。详细设计和验收矩阵见 [多设备与应用节点设计](multi-device-app-mesh.zh-CN.md)。
 
 当前 UI 与持久配置统一使用 `Sunshine + Moonlight`；旧配置中的 `PeerSpan Native` 会在启动时迁移。原生媒体代码仍保留给测试、性能回归和后续研究，但 VDD 不提供旧 PeerSpan 驱动的命名共享纹理接口，因此它不再作为可选生产后端。
 

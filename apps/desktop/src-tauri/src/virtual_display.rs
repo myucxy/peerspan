@@ -101,15 +101,15 @@ impl VirtualDisplayRuntime {
     }
 
     pub fn stop(&self) -> Result<(), String> {
-        if self
+        if !self
             .core
             .snapshot()
             .map_err(|error| error.to_string())?
-            .active_session
-            .is_some()
+            .display_sessions
+            .is_empty()
         {
             return Err(
-                "End the active display session before removing the virtual display".into(),
+                "End all active display sessions before removing the virtual display".into(),
             );
         }
 

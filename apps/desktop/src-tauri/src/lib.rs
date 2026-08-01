@@ -5,6 +5,7 @@
 #![allow(unknown_lints)]
 #![allow(linker_messages)]
 
+mod applications;
 mod clipboard;
 mod control;
 mod discovery;
@@ -25,7 +26,9 @@ use pairing::{
     DeviceCredentials, PairingOffer, PairingRuntime, fingerprint_public_key, mark_pairing_ready,
     mark_pairing_unavailable,
 };
-use peerspan_core::{AppSnapshot, LocalDevice, PeerSpanCore, Preferences, StreamingBackend};
+use peerspan_core::{
+    AppSnapshot, LocalDevice, PeerSpanCore, Preferences, PublishedApplication, StreamingBackend,
+};
 use std::{fs, sync::Arc};
 use tauri::{Manager, State};
 use uuid::Uuid;
@@ -64,7 +67,7 @@ fn update_preferences(
         virtual_display.apply_layout(preferences.screen_edge)?;
     }
     if previous.preferences.streaming_backend != preferences.streaming_backend
-        && previous.active_session.is_some()
+        && !previous.display_sessions.is_empty()
     {
         return Err("End the active display session before changing the streaming backend".into());
     }
@@ -73,6 +76,50 @@ fn update_preferences(
     probe_video_capability(&core);
     gamestream.apply_capability(&core);
     core.snapshot().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_display_layout(
+    core: State<'_, Arc<PeerSpanCore>>,
+    peer_id: String,
+    x: i32,
+    y: i32,
+) -> Result<AppSnapshot, String> {
+    let peer_id = Uuid::parse_str(&peer_id).map_err(|_| "Invalid peer device identifier")?;
+    core.set_display_layout(peer_id, x, y)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn scan_published_applications(core: State<'_, Arc<PeerSpanCore>>) -> Result<AppSnapshot, String> {
+    let applications = applications::scan_installed_applications()?;
+    core.replace_scanned_applications(applications)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn save_published_application(
+    core: State<'_, Arc<PeerSpanCore>>,
+    application: PublishedApplication,
+) -> Result<AppSnapshot, String> {
+    core.save_application(application)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn remove_published_application(
+    core: State<'_, Arc<PeerSpanCore>>,
+    application_id: String,
+) -> Result<AppSnapshot, String> {
+    let application_id =
+        Uuid::parse_str(&application_id).map_err(|_| "Invalid application identifier")?;
+    core.remove_application(application_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn sync_application_catalogs(runtime: State<'_, ControlRuntime>) -> Result<AppSnapshot, String> {
+    runtime.sync_application_catalogs()
 }
 
 #[tauri::command]
@@ -151,6 +198,9 @@ pub fn run() {
                 public_key: public_key(&identity),
             };
             let core = Arc::new(PeerSpanCore::load(local_device.clone(), &data_dir)?);
+            if let Ok(applications) = applications::scan_installed_applications() {
+                let _ = core.replace_scanned_applications(applications);
+            }
             let mut preferences = core.snapshot()?.preferences;
             if preferences.streaming_backend != StreamingBackend::SunshineMoonlight {
                 preferences.streaming_backend = StreamingBackend::SunshineMoonlight;
@@ -201,6 +251,11 @@ pub fn run() {
             end_display_session,
             start_virtual_display,
             stop_virtual_display,
+            set_display_layout,
+            scan_published_applications,
+            save_published_application,
+            remove_published_application,
+            sync_application_catalogs,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run PeerSpan desktop application");

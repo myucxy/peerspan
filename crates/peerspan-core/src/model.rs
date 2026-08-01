@@ -7,7 +7,16 @@ pub struct AppSnapshot {
     pub local_device: LocalDevice,
     pub nearby_devices: Vec<PeerDevice>,
     pub trusted_devices: Vec<PeerDevice>,
-    pub active_session: Option<DisplaySession>,
+    #[serde(default)]
+    pub display_sessions: Vec<DisplaySession>,
+    #[serde(default)]
+    pub display_layouts: Vec<DisplayLayout>,
+    #[serde(default)]
+    pub local_applications: Vec<PublishedApplication>,
+    #[serde(default)]
+    pub local_catalog_revision: u64,
+    #[serde(default)]
+    pub application_catalogs: Vec<ApplicationCatalog>,
     pub preferences: Preferences,
     pub capabilities: RuntimeCapabilities,
 }
@@ -18,7 +27,11 @@ impl AppSnapshot {
             local_device,
             nearby_devices: Vec::new(),
             trusted_devices: Vec::new(),
-            active_session: None,
+            display_sessions: Vec::new(),
+            display_layouts: Vec::new(),
+            local_applications: Vec::new(),
+            local_catalog_revision: 0,
+            application_catalogs: Vec::new(),
             preferences: Preferences::default(),
             capabilities: RuntimeCapabilities::default(),
         }
@@ -77,6 +90,61 @@ pub struct DisplaySession {
     pub height_px: u32,
     pub refresh_hz: u16,
     pub latency_ms: Option<u16>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DisplayLayout {
+    pub peer_id: Uuid,
+    pub x: i32,
+    pub y: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishedApplication {
+    pub id: Uuid,
+    pub name: String,
+    pub launch_target: String,
+    #[serde(default)]
+    pub arguments: String,
+    pub working_directory: Option<String>,
+    pub kind: ApplicationKind,
+    pub source: ApplicationSource,
+    pub enabled: bool,
+    pub updated_at_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplicationCatalog {
+    pub device_id: Uuid,
+    pub device_name: String,
+    pub revision: u64,
+    pub updated_at_unix_ms: u64,
+    pub applications: Vec<ApplicationSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplicationSummary {
+    pub id: Uuid,
+    pub name: String,
+    pub kind: ApplicationKind,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ApplicationKind {
+    Gui,
+    Terminal,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ApplicationSource {
+    Manual,
+    StartMenu,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

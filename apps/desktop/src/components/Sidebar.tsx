@@ -5,7 +5,7 @@ import { BrandMark } from "./BrandMark";
 const navigation: Array<{ key: ViewKey; label: string; caption: string; icon: typeof LayoutDashboard }> = [
   { key: "home", label: "设备", caption: "发现与连接", icon: LayoutDashboard },
   { key: "display", label: "屏幕会话", caption: "布局与画质", icon: MonitorUp },
-  { key: "nodes", label: "应用节点", caption: "后续里程碑", icon: AppWindow },
+  { key: "nodes", label: "应用节点", caption: "按机器分组", icon: AppWindow },
   { key: "settings", label: "设置", caption: "偏好与诊断", icon: Settings2 },
 ];
 
@@ -36,7 +36,7 @@ export function Sidebar({ active, localDevice, onNavigate }: SidebarProps) {
           >
             <span className="nav-icon"><Icon size={19} strokeWidth={1.8} /></span>
             <span className="nav-copy"><strong>{label}</strong><small>{caption}</small></span>
-            {key === "nodes" && <span className="nav-badge">预览</span>}
+            {key === "nodes" && <span className="nav-badge">新</span>}
           </button>
         ))}
       </nav>

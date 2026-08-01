@@ -6,11 +6,13 @@ use crate::{
 };
 use ed25519_dalek::{Signer as _, SigningKey};
 use peerspan_core::{
+    AppSnapshot, ApplicationCatalog, ApplicationKind as CoreApplicationKind, ApplicationSummary,
     Capability, CapabilityState, DeviceStatus, DisplaySession, PeerDevice, PeerSpanCore,
     QualityMode, SessionDirection, SessionState, StreamingBackend, parse_release_shortcut,
 };
 use peerspan_media::{MediaError, MediaKeyMaterial, UdpMediaReceiver, UdpMediaSender};
 use peerspan_protocol::{
+    ApplicationCatalogExchange, ApplicationDescriptor, ApplicationKind as ProtocolApplicationKind,
     ControlMessage, DisplayDecision, DisplayOffer, Heartbeat, Hello, InputEvent, PROTOCOL_VERSION,
     PointerButton, SessionEnd, StreamReady, StreamTransport, VideoCodec,
 };
@@ -34,8 +36,6 @@ use rustls::{
     version::TLS13,
 };
 use serde::{Serialize, de::DeserializeOwned};
-#[cfg(test)]
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
     collections::HashMap,
     fmt,
@@ -47,14 +47,14 @@ use std::{
         mpsc,
     },
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
 use x509_parser::{oid_registry::OID_SIG_ED25519, parse_x509_certificate};
 
 pub const CONTROL_PORT: u16 = 37_622;
-const ALPN_PROTOCOL: &[u8] = b"peerspan-control/5";
-const MEDIA_EXPORTER_LABEL: &[u8] = b"EXPORTER-PeerSpan-media-v5";
+const ALPN_PROTOCOL: &[u8] = b"peerspan-control/6";
+const MEDIA_EXPORTER_LABEL: &[u8] = b"EXPORTER-PeerSpan-media-v6";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const SESSION_IO_TIMEOUT: Duration = Duration::from_millis(25);
@@ -65,6 +65,7 @@ const GAMESTREAM_START_TIMEOUT: Duration = Duration::from_secs(30);
 const FRAME_ACQUIRE_TIMEOUT: Duration = Duration::from_millis(4);
 const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 const MAX_SERVER_WORKERS: usize = 32;
+const MAX_CATALOG_APPLICATIONS: usize = 512;
 
 type ClientTlsStream = StreamOwned<ClientConnection, TcpStream>;
 type ServerTlsStream = StreamOwned<ServerConnection, TcpStream>;
@@ -395,13 +396,18 @@ impl ControlRuntime {
                 )?;
             }
         }
-        if snapshot.active_session.is_some() {
-            return Err("Another PeerSpan display session is already active".into());
+        if snapshot
+            .display_sessions
+            .iter()
+            .any(|session| session.peer_id == peer_id)
+        {
+            return Err("A display session with this device is already active".into());
         }
         let peer = resolve_online_trusted_peer(&snapshot, peer_id)?;
         let stream = connect_to_peer(&peer)?;
         configure_stream(&stream, HANDSHAKE_TIMEOUT)?;
         let mut channel = connect_tls(stream, &self.credentials, &self.tls_identity, &peer)?;
+        exchange_application_catalog(&mut channel, &self.core, &peer, true)?;
 
         let session = DisplaySession {
             id: Uuid::new_v4(),
@@ -726,8 +732,10 @@ impl ControlRuntime {
             .cloned()
             .ok_or_else(|| "The display session is no longer active".to_owned())?;
         if let Ok(snapshot) = self.core.snapshot()
-            && let Some(session) = snapshot.active_session
-            && session.id == session_id
+            && let Some(session) = snapshot
+                .display_sessions
+                .iter()
+                .find(|session| session.id == session_id)
         {
             let _ = self.core.update_display_session(
                 session_id,
@@ -741,16 +749,35 @@ impl ControlRuntime {
                 .core
                 .snapshot()
                 .map_err(|error| error.to_string())?
-                .active_session;
-            if active
-                .as_ref()
-                .is_none_or(|session| session.id != session_id)
-            {
+                .display_sessions;
+            if !active.iter().any(|session| session.id == session_id) {
                 return Ok(());
             }
             thread::sleep(Duration::from_millis(50));
         }
         Err("The session shutdown did not finish within two seconds".into())
+    }
+
+    pub fn sync_application_catalogs(&self) -> Result<AppSnapshot, String> {
+        reap_finished_client_workers(&self.client_workers);
+        let snapshot = self.core.snapshot().map_err(|error| error.to_string())?;
+        let peers: Vec<_> = snapshot
+            .nearby_devices
+            .iter()
+            .filter(|peer| peer.trusted && peer.status == DeviceStatus::Online)
+            .cloned()
+            .collect();
+        for peer in peers {
+            let _ = self.sync_peer_application_catalog(&peer);
+        }
+        self.core.snapshot().map_err(|error| error.to_string())
+    }
+
+    fn sync_peer_application_catalog(&self, peer: &PeerDevice) -> Result<(), String> {
+        let stream = connect_to_peer(peer)?;
+        configure_stream(&stream, HANDSHAKE_TIMEOUT)?;
+        let mut channel = connect_tls(stream, &self.credentials, &self.tls_identity, peer)?;
+        exchange_application_catalog(&mut channel, &self.core, peer, false)
     }
 }
 
@@ -966,6 +993,91 @@ fn connect_tls(
     }
 }
 
+fn exchange_application_catalog<S: Read + Write>(
+    channel: &mut S,
+    core: &PeerSpanCore,
+    peer: &PeerDevice,
+    continue_control: bool,
+) -> Result<(), String> {
+    write_control_message(
+        channel,
+        &ControlMessage::ApplicationCatalogExchange(local_application_catalog(
+            core,
+            continue_control,
+        )?),
+    )?;
+    match read_control_message(channel)? {
+        ControlMessage::ApplicationCatalogExchange(exchange) => {
+            apply_remote_application_catalog(core, peer, exchange)
+        }
+        _ => Err("The peer did not return an application catalog".into()),
+    }
+}
+
+fn local_application_catalog(
+    core: &PeerSpanCore,
+    continue_control: bool,
+) -> Result<ApplicationCatalogExchange, String> {
+    let snapshot = core.snapshot().map_err(|error| error.to_string())?;
+    let mut applications: Vec<_> = snapshot
+        .local_applications
+        .iter()
+        .filter(|application| application.enabled)
+        .take(MAX_CATALOG_APPLICATIONS)
+        .map(|application| ApplicationDescriptor {
+            id: application.id,
+            name: application.name.clone(),
+            kind: match application.kind {
+                CoreApplicationKind::Gui => ProtocolApplicationKind::Gui,
+                CoreApplicationKind::Terminal => ProtocolApplicationKind::Terminal,
+            },
+        })
+        .collect();
+    applications.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    Ok(ApplicationCatalogExchange {
+        device_id: snapshot.local_device.id,
+        revision: snapshot.local_catalog_revision,
+        applications,
+        continue_control,
+    })
+}
+
+fn apply_remote_application_catalog(
+    core: &PeerSpanCore,
+    peer: &PeerDevice,
+    exchange: ApplicationCatalogExchange,
+) -> Result<(), String> {
+    if exchange.device_id != peer.id {
+        return Err("The application catalog is not bound to the authenticated peer".into());
+    }
+    if exchange.applications.len() > MAX_CATALOG_APPLICATIONS {
+        return Err("The peer application catalog exceeds the allowed size".into());
+    }
+    let mut applications = Vec::with_capacity(exchange.applications.len());
+    for application in exchange.applications {
+        let name = application.name.trim();
+        if name.is_empty() || name.chars().count() > 128 {
+            return Err("The peer application catalog contains an invalid name".into());
+        }
+        applications.push(ApplicationSummary {
+            id: application.id,
+            name: name.to_owned(),
+            kind: match application.kind {
+                ProtocolApplicationKind::Gui => CoreApplicationKind::Gui,
+                ProtocolApplicationKind::Terminal => CoreApplicationKind::Terminal,
+            },
+        });
+    }
+    core.upsert_application_catalog(ApplicationCatalog {
+        device_id: peer.id,
+        device_name: peer.name.clone(),
+        revision: exchange.revision,
+        updated_at_unix_ms: unix_millis(),
+        applications,
+    })
+    .map_err(|error| error.to_string())
+}
+
 fn export_client_media_key(
     connection: &ClientConnection,
     session_id: Uuid,
@@ -1045,6 +1157,23 @@ fn handle_incoming(
         &mut channel,
         &ControlMessage::Hello(local_hello(&credentials.device)),
     )?;
+
+    let exchange = match read_control_message(&mut channel)? {
+        ControlMessage::ApplicationCatalogExchange(exchange) => exchange,
+        _ => return Err("TLS control connection did not exchange application catalogs".into()),
+    };
+    let continue_control = exchange.continue_control;
+    apply_remote_application_catalog(&core, &peer, exchange)?;
+    write_control_message(
+        &mut channel,
+        &ControlMessage::ApplicationCatalogExchange(local_application_catalog(
+            &core,
+            continue_control,
+        )?),
+    )?;
+    if !continue_control {
+        return Ok(());
+    }
 
     let offer = match read_control_message(&mut channel)? {
         ControlMessage::DisplayOffer(offer) => offer,
@@ -1513,7 +1642,12 @@ fn run_client_session(
                 let latency = core
                     .snapshot()
                     .ok()
-                    .and_then(|snapshot| snapshot.active_session)
+                    .and_then(|snapshot| {
+                        snapshot
+                            .display_sessions
+                            .into_iter()
+                            .find(|session| session.id == session_id)
+                    })
                     .and_then(|session| session.latency_ms);
                 let _ = core.update_display_session(session_id, SessionState::Streaming, latency);
             }
@@ -1676,8 +1810,10 @@ impl ControlMessageReader {
 
 fn update_session_latency(core: &PeerSpanCore, session_id: Uuid, latency: u16) {
     if let Ok(snapshot) = core.snapshot()
-        && let Some(session) = snapshot.active_session
-        && session.id == session_id
+        && let Some(session) = snapshot
+            .display_sessions
+            .iter()
+            .find(|session| session.id == session_id)
     {
         let _ = core.update_display_session(session_id, session.state, Some(latency));
     }
@@ -2070,7 +2206,6 @@ fn tls_server_name(device_id: Uuid) -> String {
     format!("{}.peerspan.local", device_id.simple())
 }
 
-#[cfg(test)]
 fn unix_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2256,14 +2391,14 @@ mod tests {
             core_a
                 .snapshot()
                 .unwrap()
-                .active_session
-                .as_ref()
+                .display_sessions
+                .first()
                 .and_then(|session| session.latency_ms)
                 .is_some()
-                && core_b.snapshot().unwrap().active_session.is_some()
+                && !core_b.snapshot().unwrap().display_sessions.is_empty()
         }));
         assert_eq!(
-            core_b.snapshot().unwrap().active_session.unwrap().direction,
+            core_b.snapshot().unwrap().display_sessions[0].direction,
             SessionDirection::Receiving
         );
         let encoded_access_unit = vec![0x65_u8; 70_000];
@@ -2282,8 +2417,8 @@ mod tests {
 
         runtime_a.end_display_session(session.id).unwrap();
         assert!(wait_until(|| {
-            core_a.snapshot().unwrap().active_session.is_none()
-                && core_b.snapshot().unwrap().active_session.is_none()
+            core_a.snapshot().unwrap().display_sessions.is_empty()
+                && core_b.snapshot().unwrap().display_sessions.is_empty()
         }));
         assert!(runtime_a.active_media.lock().unwrap().is_empty());
         assert!(runtime_b.active_media.lock().unwrap().is_empty());
@@ -2291,6 +2426,108 @@ mod tests {
         drop(runtime_b);
         let _ = fs::remove_dir_all(data_a);
         let _ = fs::remove_dir_all(data_b);
+    }
+
+    #[test]
+    fn multiple_tls_peers_keep_sessions_and_catalogs_isolated() {
+        let credentials_a = credentials(81, "Hub");
+        let credentials_b = credentials(82, "Node B");
+        let credentials_c = credentials(83, "Node C");
+        let data_a = std::env::temp_dir().join(format!("peerspan-multi-a-{}", Uuid::new_v4()));
+        let data_b = std::env::temp_dir().join(format!("peerspan-multi-b-{}", Uuid::new_v4()));
+        let data_c = std::env::temp_dir().join(format!("peerspan-multi-c-{}", Uuid::new_v4()));
+        let core_a = Arc::new(PeerSpanCore::load(credentials_a.device.clone(), &data_a).unwrap());
+        let core_b = Arc::new(PeerSpanCore::load(credentials_b.device.clone(), &data_b).unwrap());
+        let core_c = Arc::new(PeerSpanCore::load(credentials_c.device.clone(), &data_c).unwrap());
+        for core in [&core_a, &core_b, &core_c] {
+            ready_sender(core);
+        }
+        core_a
+            .save_application(peerspan_core::PublishedApplication {
+                id: Uuid::new_v4(),
+                name: "Hub Editor".into(),
+                launch_target: "hub.exe".into(),
+                arguments: String::new(),
+                working_directory: None,
+                kind: CoreApplicationKind::Gui,
+                source: peerspan_core::ApplicationSource::Manual,
+                enabled: true,
+                updated_at_unix_ms: 10,
+            })
+            .unwrap();
+        core_b
+            .save_application(peerspan_core::PublishedApplication {
+                id: Uuid::new_v4(),
+                name: "Node B Tool".into(),
+                launch_target: "b.exe".into(),
+                arguments: String::new(),
+                working_directory: None,
+                kind: CoreApplicationKind::Gui,
+                source: peerspan_core::ApplicationSource::Manual,
+                enabled: true,
+                updated_at_unix_ms: 11,
+            })
+            .unwrap();
+
+        let listener_a = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let listener_b = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let listener_c = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let peer_a_for_b = peer(&credentials_a, listener_a.local_addr().unwrap().port());
+        let peer_a_for_c = peer_a_for_b.clone();
+        let peer_b = peer(&credentials_b, listener_b.local_addr().unwrap().port());
+        let peer_c = peer(&credentials_c, listener_c.local_addr().unwrap().port());
+        for remote in [peer_b.clone(), peer_c.clone()] {
+            core_a.trust_device(remote.clone()).unwrap();
+            core_a.upsert_nearby_device(remote).unwrap();
+        }
+        core_b.trust_device(peer_a_for_b.clone()).unwrap();
+        core_b.upsert_nearby_device(peer_a_for_b).unwrap();
+        core_c.trust_device(peer_a_for_c.clone()).unwrap();
+        core_c.upsert_nearby_device(peer_a_for_c).unwrap();
+
+        let runtime_a =
+            ControlRuntime::start_with_listener(credentials_a, Arc::clone(&core_a), listener_a)
+                .unwrap();
+        let runtime_b =
+            ControlRuntime::start_with_listener(credentials_b, Arc::clone(&core_b), listener_b)
+                .unwrap();
+        let runtime_c =
+            ControlRuntime::start_with_listener(credentials_c, Arc::clone(&core_c), listener_c)
+                .unwrap();
+
+        runtime_a.sync_application_catalogs().unwrap();
+        assert_eq!(core_a.snapshot().unwrap().application_catalogs.len(), 2);
+        assert_eq!(
+            core_b.snapshot().unwrap().application_catalogs[0].applications[0].name,
+            "Hub Editor"
+        );
+        let first = runtime_a.request_display_session(peer_b.id).unwrap();
+        let second = runtime_a.request_display_session(peer_c.id).unwrap();
+        assert!(wait_until(|| core_a
+            .snapshot()
+            .unwrap()
+            .display_sessions
+            .len()
+            == 2));
+        runtime_a.end_display_session(first.id).unwrap();
+        assert!(wait_until(|| {
+            let sessions = core_a.snapshot().unwrap().display_sessions;
+            sessions.len() == 1 && sessions[0].id == second.id
+        }));
+        assert_eq!(core_c.snapshot().unwrap().display_sessions.len(), 1);
+        runtime_a.end_display_session(second.id).unwrap();
+        assert!(wait_until(|| core_a
+            .snapshot()
+            .unwrap()
+            .display_sessions
+            .is_empty()));
+
+        drop(runtime_a);
+        drop(runtime_b);
+        drop(runtime_c);
+        let _ = fs::remove_dir_all(data_a);
+        let _ = fs::remove_dir_all(data_b);
+        let _ = fs::remove_dir_all(data_c);
     }
 
     #[test]
@@ -2327,7 +2564,7 @@ mod tests {
             )
             .is_err()
         );
-        assert!(core_b.snapshot().unwrap().active_session.is_none());
+        assert!(core_b.snapshot().unwrap().display_sessions.is_empty());
         let _ = fs::remove_dir_all(data_a);
         let _ = fs::remove_dir_all(data_b);
     }

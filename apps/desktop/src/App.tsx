@@ -5,7 +5,7 @@ import { LocalPairingDialog } from "./components/LocalPairingDialog";
 import { Sidebar } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
 import { useAppSnapshot } from "./hooks/useAppSnapshot";
-import { createPairingOffer, endSession, isDesktopRuntime, pairDevice, requestSession, startVirtualDisplay, stopVirtualDisplay, type PairingOffer } from "./lib/bridge";
+import { createPairingOffer, endSession, isDesktopRuntime, pairDevice, requestSession, setDisplayLayout, startVirtualDisplay, stopVirtualDisplay, type PairingOffer } from "./lib/bridge";
 import type { DisplaySession, PeerDevice, ViewKey } from "./types";
 import { DisplayView } from "./views/DisplayView";
 import { HomeView } from "./views/HomeView";
@@ -26,11 +26,11 @@ export default function App() {
   const [localPairingOffer, setLocalPairingOffer] = useState<PairingOffer>();
   const [toast, setToast] = useState<ToastState>();
   const [virtualDisplayBusy, setVirtualDisplayBusy] = useState(false);
-  const lastSession = useRef<DisplaySession | undefined>(undefined);
-  const reconnectPeer = useRef<string | undefined>(undefined);
-  const reconnectBusy = useRef(false);
+  const previousSessions = useRef(new Map<string, DisplaySession>());
+  const reconnectPeers = useRef(new Set<string>());
+  const reconnectBusy = useRef(new Set<string>());
   const intentionallyEnded = useRef(new Set<string>());
-  const { snapshot, loading, scanning, error, scan, updatePreferences } = useAppSnapshot();
+  const { snapshot, loading, scanning, error, scan, updatePreferences, replaceSnapshot } = useAppSnapshot();
 
   useEffect(() => {
     if (!toast) return;
@@ -44,51 +44,48 @@ export default function App() {
 
   useEffect(() => {
     if (!snapshot || !isDesktopRuntime()) return;
-    const active = snapshot.activeSession;
-    if (active) {
-      lastSession.current = active;
-      reconnectPeer.current = undefined;
-      return;
-    }
-
-    const previous = lastSession.current;
-    if (previous) {
-      lastSession.current = undefined;
-      if (intentionallyEnded.current.delete(previous.id)) {
-        reconnectPeer.current = undefined;
-      } else if (previous.direction === "sending" && snapshot.preferences.autoReconnect) {
-        reconnectPeer.current = previous.peerId;
-        setToast({ tone: "error", message: "连接已中断，PeerSpan 正在等待设备恢复并自动重连" });
+    const current = new Map(snapshot.displaySessions.map((session) => [session.id, session]));
+    for (const previous of previousSessions.current.values()) {
+      if (current.has(previous.id)) continue;
+      if (intentionallyEnded.current.delete(previous.id)) continue;
+      if (previous.direction === "sending" && snapshot.preferences.autoReconnect) {
+        reconnectPeers.current.add(previous.peerId);
+        setToast({ tone: "error", message: "一台设备的连接已中断，其他会话不受影响；PeerSpan 将独立重连" });
       }
     }
+    for (const session of current.values()) reconnectPeers.current.delete(session.peerId);
+    previousSessions.current = current;
     if (!snapshot.preferences.autoReconnect) {
-      reconnectPeer.current = undefined;
+      reconnectPeers.current.clear();
       return;
     }
-    const peerId = reconnectPeer.current;
-    if (!peerId || reconnectBusy.current) return;
-    const peer = snapshot.nearbyDevices.find((device) => device.id === peerId && device.status === "online");
-    if (!peer) return;
-
-    reconnectBusy.current = true;
-    requestSession(peerId)
-      .then(async (session) => {
-        reconnectPeer.current = undefined;
-        lastSession.current = session;
-        await scan();
-        setToast({ tone: "success", message: `已自动恢复与 ${peer.name} 的屏幕会话` });
-      })
-      .catch(() => {
-        // The 2-second device refresh drives the next bounded reconnect attempt.
-      })
-      .finally(() => {
-        reconnectBusy.current = false;
-      });
+    for (const peerId of reconnectPeers.current) {
+      if (reconnectBusy.current.has(peerId)) continue;
+      if (snapshot.displaySessions.some((session) => session.peerId === peerId)) continue;
+      const peer = snapshot.nearbyDevices.find((device) => device.id === peerId && device.status === "online");
+      if (!peer) continue;
+      reconnectBusy.current.add(peerId);
+      requestSession(peerId)
+        .then(async () => {
+          reconnectPeers.current.delete(peerId);
+          await scan();
+          setToast({ tone: "success", message: `已自动恢复与 ${peer.name} 的屏幕会话` });
+        })
+        .catch(() => {
+          // The 2-second device refresh drives the next bounded reconnect attempt.
+        })
+        .finally(() => reconnectBusy.current.delete(peerId));
+    }
   }, [snapshot, scan]);
 
   const selectDevice = async (device: PeerDevice) => {
     if (!device.trusted) {
       setPairingDevice(device);
+      return;
+    }
+    if (snapshot?.displaySessions.some((session) => session.peerId === device.id)) {
+      setActiveView("display");
+      setToast({ tone: "success", message: `${device.name} 的屏幕会话已在运行` });
       return;
     }
     try {
@@ -99,6 +96,14 @@ export default function App() {
     } catch (reason) {
       setToast({ tone: "error", message: errorMessage(reason) });
       setActiveView("display");
+    }
+  };
+
+  const updateDisplayLayout = async (peerId: string, x: number, y: number) => {
+    try {
+      replaceSnapshot(await setDisplayLayout(peerId, x, y));
+    } catch (reason) {
+      setToast({ tone: "error", message: errorMessage(reason) });
     }
   };
 
@@ -170,8 +175,8 @@ export default function App() {
         <Sidebar active={activeView} localDevice={snapshot.localDevice} onNavigate={setActiveView} />
         <main className="content-area">
           {activeView === "home" && <HomeView snapshot={snapshot} scanning={scanning} preview={!isDesktopRuntime()} onScan={() => void scan()} onSelectDevice={(device) => void selectDevice(device)} onOpenDisplay={() => setActiveView("display")} onCreatePairingOffer={() => void showLocalPairingOffer()} />}
-          {activeView === "display" && <DisplayView snapshot={snapshot} virtualDisplayBusy={virtualDisplayBusy} onChangePreferences={updatePreferences} onSetVirtualDisplay={setVirtualDisplay} onEndSession={stopSession} />}
-          {activeView === "nodes" && <NodesView />}
+          {activeView === "display" && <DisplayView snapshot={snapshot} virtualDisplayBusy={virtualDisplayBusy} onChangePreferences={updatePreferences} onSetVirtualDisplay={setVirtualDisplay} onSetLayout={updateDisplayLayout} onEndSession={stopSession} />}
+          {activeView === "nodes" && <NodesView snapshot={snapshot} onSnapshotChanged={replaceSnapshot} onError={(message) => setToast({ tone: "error", message })} onSuccess={(message) => setToast({ tone: "success", message })} />}
           {activeView === "settings" && <SettingsView snapshot={snapshot} onChangePreferences={updatePreferences} />}
         </main>
       </div>
