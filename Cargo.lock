@@ -2472,6 +2472,7 @@ dependencies = [
  "peerspan-core",
  "peerspan-media",
  "peerspan-protocol",
+ "peerspan-video",
  "rand_core 0.6.4",
  "rcgen",
  "rustls",
@@ -2506,6 +2507,16 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "peerspan-video"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "windows",
 ]
 
 [[package]]

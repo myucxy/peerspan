@@ -2,6 +2,7 @@ mod control;
 mod discovery;
 mod identity;
 mod pairing;
+mod video;
 mod virtual_display;
 
 use control::{ControlRuntime, mark_control_ready, mark_control_unavailable};
@@ -15,6 +16,7 @@ use peerspan_core::{AppSnapshot, LocalDevice, PeerSpanCore, Preferences};
 use std::{fs, sync::Arc};
 use tauri::{Manager, State};
 use uuid::Uuid;
+use video::probe_video_capability;
 use virtual_display::VirtualDisplayRuntime;
 
 #[tauri::command]
@@ -114,6 +116,7 @@ pub fn run() {
                 public_key: public_key(&identity),
             };
             let core = Arc::new(PeerSpanCore::load(local_device.clone(), &data_dir)?);
+            probe_video_capability(&core);
             app.manage(VirtualDisplayRuntime::new(Arc::clone(&core)));
             let credentials = DeviceCredentials {
                 device: local_device.clone(),

@@ -20,6 +20,7 @@ mdns-sd = "0.20.3"
 peerspan-core = { path = "../../../crates/peerspan-core" }
 peerspan-media = { path = "../../../crates/peerspan-media" }
 peerspan-protocol = { path = "../../../crates/peerspan-protocol" }
+peerspan-video = { path = "../../../crates/peerspan-video" }
 rcgen = "0.13"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 serde.workspace = true

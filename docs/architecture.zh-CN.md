@@ -11,7 +11,8 @@ peerspan/
 ├─ crates/
 │  ├─ peerspan-core/        # 与 UI/传输实现无关的领域规则和配置
 │  ├─ peerspan-media/       # 认证媒体数据报、分片、重放保护和低延迟重组
-│  └─ peerspan-protocol/    # 版本化的跨机控制消息
+│  ├─ peerspan-protocol/    # 版本化的跨机控制消息
+│  └─ peerspan-video/       # D3D11 与 Media Foundation 硬件视频管线
 ├─ native/                  # IddCx、D3D11 和输入等 Windows 原生模块
 └─ docs/                    # 需求、架构、环境和验证记录
 ```
@@ -35,6 +36,8 @@ peerspan/
 当前控制会话支持 Display Offer/Decision、媒体端口协商、500 ms 心跳、往返延迟统计、主动 Session End 和双端清理。核心层只允许一个活动显示会话并限制状态合法迁移。媒体硬件编解码和输入链路尚未接通时会明确拒绝相应能力；已认证的显示会话保持 `Negotiating`，只有真实媒体被接收并呈现后才能进入 `Streaming`。
 
 `peerspan-media` 已建立编码视频访问单元的数据报边界：单个 UDP 数据报不超过 1200 字节，以 ChaCha20-Poly1305 认证加密并绑定会话 UUID、包序号、帧号、分片序号和时间戳；接收端提供 128 包重放窗口、乱序重组、8 MiB 单帧上限、最多 4 个在途帧和 80 ms 过期丢弃。Windows UDP 套接字显式申请 4 MiB 收发缓冲，避免大关键帧突发超过系统默认缓冲。双方从已认证 TLS 1.3 连接以会话 UUID 作为上下文导出 36 字节密钥材料，接收端绑定临时 UDP 端口并通过 Display Decision 返回，控制会话结束时双端同步释放套接字和清零密钥。双本地实例已经传输并还原 70 KB 加密访问单元；真实硬件编码器与解码呈现仍待接入，因此生产能力当前不会标记为就绪。
+
+`peerspan-video` 负责 Windows 原生视频能力边界。桌面启动时会创建带视频支持的真实 D3D11 硬件设备和 Media Foundation DXGI 设备管理器，并分别枚举 D3D11-aware 的 H.264 编码/解码 MFT；编码端只接受硬件 MFT，解码端允许使用 Windows 自带但由 D3D11/DXVA 加速的解码 MFT。探测结果会写入诊断能力，但在 IDD 纹理交接、颜色转换和实时编解码实际接通前仍保持“开发中”，不会仅凭安装了编解码器就允许串流。可用 `cargo run -p peerspan-video --example probe` 独立复核本机结果。
 
 本机 Ed25519 身份私钥使用当前 Windows 用户作用域的 DPAPI 加密后写入 `identity.json`，并附加 PeerSpan 固定应用熵。文件通过同目录临时文件和原子替换更新，避免写入中断留下半份身份。旧版 `signingKeyHex` 明文格式会在首次成功读取时立即迁移为 `protectedSigningKeyHex`，设备 ID 与密钥保持不变；DPAPI 数据损坏或换到其他 Windows 用户后无法解密时，应用明确报错且不会静默生成新身份，以免破坏既有信任关系。
 

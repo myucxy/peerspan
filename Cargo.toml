@@ -5,6 +5,7 @@ members = [
     "crates/peerspan-core",
     "crates/peerspan-media",
     "crates/peerspan-protocol",
+    "crates/peerspan-video",
 ]
 
 [workspace.package]
