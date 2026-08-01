@@ -112,5 +112,8 @@ cargo test --workspace
 cargo test --workspace -- --ignored
 npm run dev
 npm run build
+npm run build:installer
 pwsh -File native\idd\build.ps1 -Configuration Release -Platform x64
 ```
+
+`npm run build:installer` 使用 Tauri/NSIS 生成 x64 按机器安装包，并把 WebView2 Evergreen 离线安装器、PeerSpan IddCx 测试驱动、匹配的测试证书和防火墙脚本打入同一个 EXE。目标机不需要安装本节中的开发工具。包的内容、测试签名边界和 `192.168.9.26` 验证记录见 [Windows 一体化测试安装包](windows-installer.zh-CN.md)。

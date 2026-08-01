@@ -38,7 +38,15 @@ if (-not (Test-Path -LiteralPath $spectreLib)) {
 }
 
 $solution = Join-Path $PSScriptRoot "PeerSpanIdd.sln"
-& $msbuild $solution "/m" "/nr:false" "/t:Rebuild" "/p:Configuration=$Configuration" "/p:Platform=$Platform" "/v:minimal" "/nologo"
+# WDK 26100 reports InfVerif 2084 because the function-driver service points at
+# Windows' own WUDFRd.sys instead of a CopyFiles entry. Downlevel Windows 10 does
+# not ship WUDFRD.inf for Include/Needs, and copying a system binary into this
+# package would be incorrect. The inbox rdpidd.inf uses this same AddService
+# pattern, so demote only this known diagnostic while retaining all other build
+# warnings and the catalog signability checks.
+& $msbuild $solution "/m" "/nr:false" "/t:Rebuild" `
+    "/p:Configuration=$Configuration" "/p:Platform=$Platform" `
+    "/p:MSBuildWarningsAsMessages=2084" "/v:minimal" "/nologo"
 if ($LASTEXITCODE -ne 0) {
     throw "PeerSpan IddCx build failed with exit code $LASTEXITCODE."
 }

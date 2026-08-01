@@ -1,3 +1,10 @@
+// MSVC's localized "creating library" progress line is emitted on stdout.
+// Rust 1.97 classifies any linker stdout as `linker_messages`, even though this
+// line is informational rather than an LNK warning. Keep older MSRV compilers
+// compatible while suppressing only this crate-level false positive.
+#![allow(unknown_lints)]
+#![allow(linker_messages)]
+
 mod clipboard;
 mod control;
 mod discovery;

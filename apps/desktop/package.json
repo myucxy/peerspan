@@ -7,6 +7,7 @@
     "dev": "tauri dev",
     "dev:web": "vite",
     "build": "tauri build",
+    "build:installer": "tauri build --config src-tauri/tauri.installer.conf.json --bundles nsis",
     "build:web": "tsc -b && vite build",
     "test": "vitest run",
     "typecheck": "tsc -b --pretty false"

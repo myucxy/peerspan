@@ -28,13 +28,9 @@ PeerSpanIdd.dll=1
 ; =================== UMDF Device ==================================
 
 [PeerSpan_Install.NT]
-Include=WUDFRD.inf
-Needs=WUDFRD.NT
 CopyFiles=UMDriverCopy
 
 [PeerSpan_Install.NT.hw]
-Include=WUDFRD.inf
-Needs=WUDFRD.NT.HW
 AddReg = PeerSpan_HardwareDeviceSettings
 
 [PeerSpan_HardwareDeviceSettings]
@@ -42,8 +38,7 @@ HKR,, "UpperFilters",  %REG_MULTI_SZ%, "IndirectKmd"
 HKR, "WUDF", "DeviceGroupId", %REG_SZ%, "PeerSpan.VirtualDisplay.UMDF"
 
 [PeerSpan_Install.NT.Services]
-Include=WUDFRD.inf
-Needs=WUDFRD.NT.Services
+AddService=WUDFRd,0x000001fa,WUDFRd_ServiceInstall
 
 [PeerSpan_Install.NT.Wdf]
 UmdfService=PeerSpanIdd,PeerSpanIdd_Install
@@ -54,6 +49,14 @@ UmdfKernelModeClientPolicy = AllowKernelModeClients
 UmdfLibraryVersion=$UMDFVERSION$
 ServiceBinary=%12%\UMDF\PeerSpanIdd.dll
 UmdfExtensions = IddCx0102
+
+[WUDFRd_ServiceInstall]
+DisplayName = %WUDFRdDisplayName%
+ServiceType = 1
+StartType = 3
+ErrorControl = 1
+ServiceBinary = %12%\WUDFRd.sys
+StartName = \Driver\WudfRd
 
 [DestinationDirs]
 UMDriverCopy=12,UMDF ; copy to drivers\umdf
@@ -67,6 +70,7 @@ PeerSpanIdd.dll
 ManufacturerName="PeerSpan Project"
 DiskName = "PeerSpan Virtual Display Driver"
 DeviceName="PeerSpan Virtual Display"
+WUDFRdDisplayName = "Windows Driver Frameworks - User-mode Driver Framework Reflector"
 
 REG_MULTI_SZ  = 0x00010000
 REG_SZ        = 0x00000000

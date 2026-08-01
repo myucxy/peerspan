@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "publisher": "PeerSpan Project",
+    "resources": {
+      "../../../target/installer-resources/driver/install-dev.ps1": "driver/install-dev.ps1",
+      "../../../target/installer-resources/driver/uninstall-dev.ps1": "driver/uninstall-dev.ps1",
+      "../../../target/installer-resources/driver/x64/Release/PeerSpanIdd.cer": "driver/x64/Release/PeerSpanIdd.cer",
+      "../../../target/installer-resources/driver/x64/Release/PeerSpanIdd/PeerSpanIdd.inf": "driver/x64/Release/PeerSpanIdd/PeerSpanIdd.inf",
+      "../../../target/installer-resources/driver/x64/Release/PeerSpanIdd/peerspanidd.cat": "driver/x64/Release/PeerSpanIdd/peerspanidd.cat",
+      "../../../target/installer-resources/driver/x64/Release/PeerSpanIdd/PeerSpanIdd.dll": "driver/x64/Release/PeerSpanIdd/PeerSpanIdd.dll",
+      "../../../target/installer-resources/driver/manifest.json": "driver/manifest.json"
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "offlineInstaller",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "perMachine",
+        "installerHooks": "installer-hooks.nsh",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "languages": ["SimpChinese", "English"],
+        "displayLanguageSelector": true,
+        "compression": "lzma"
+      }
+    }
+  }
+}

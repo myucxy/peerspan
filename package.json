@@ -10,6 +10,7 @@
     "dev:web": "npm run dev:web --workspace @peerspan/desktop",
     "build": "npm run build --workspace @peerspan/desktop",
     "build:web": "npm run build:web --workspace @peerspan/desktop",
+    "build:installer": "pwsh -File scripts\\build-windows-installer.ps1",
     "test": "npm run test --workspace @peerspan/desktop",
     "typecheck": "npm run typecheck --workspace @peerspan/desktop"
   },

@@ -32,7 +32,7 @@ Windows 服务本身运行在 Session 0，不能直接承载普通 GUI。安装�
 - **像原生窗口一样无缝跨边缘拖动可行，但工程难度高**。两套 Windows 桌面无法共享同一个原生窗口对象，需要在远端创建代理窗口并同步生命周期。
 - 现有开源项目分别解决了虚拟显示器、低延迟串流、远程应用窗口或跨机键鼠，但尚未发现一个成熟项目完整覆盖 PeerSpan 的 Windows 双向体验。
 
-详细竞品、架构、风险和 MVP 范围见 [可行性分析](docs/feasibility.zh-CN.md)，无屏电脑需求见 [应用节点模式说明](docs/app-node-mode.zh-CN.md)，逐项完成情况见 [需求与实现状态](docs/requirements-status.zh-CN.md)，最后的真实驱动与双机矩阵见 [Windows 专用机验收手册](docs/windows-acceptance.zh-CN.md)。
+详细竞品、架构、风险和 MVP 范围见 [可行性分析](docs/feasibility.zh-CN.md)，无屏电脑需求见 [应用节点模式说明](docs/app-node-mode.zh-CN.md)，逐项完成情况见 [需求与实现状态](docs/requirements-status.zh-CN.md)，一体化部署见 [Windows 安装包说明](docs/windows-installer.zh-CN.md)，最后的真实驱动与双机矩阵见 [Windows 专用机验收手册](docs/windows-acceptance.zh-CN.md)。
 
 ## 建议的首发范围
 
@@ -74,7 +74,8 @@ Windows 服务本身运行在 Session 0，不能直接承载普通 GUI。安装�
 - 认证 TLS 输入回传、限定虚拟屏的 `SendInput` 注入、可配置紧急释放、断连全键释放和遗留窗口回迁；
 - 1 MiB 上限的双向纯文本剪贴板同步、循环抑制、1 秒失活清理和随局域网发现持续自动重连；
 - 当前用户级 Windows 登录自启动；
-- Rust、TypeScript、Vitest、Web 生产构建和 Tauri Release 构建验证。
+- Rust、TypeScript、Vitest、Web 生产构建和 Tauri Release 构建验证；
+- 包含 PeerSpan 测试驱动、证书、防火墙规则和 WebView2 离线运行时的一体化 NSIS 安装包，并已在 `192.168.9.26` 验证安装链路。
 
 MVP 代码链路已经贯通。当前开发机未安装 PeerSpan 测试驱动，因此剩余工作属于外部实机验收：在专用 Windows 10/11 机器安装测试/正式签名驱动，验证真实 IddCx 帧跨两台电脑、1080p60 长稳和端到端低于 80 ms。仓库不会自动修改系统测试签名或信任，也不会用模拟画面代替这项验收。
 
@@ -92,4 +93,5 @@ cargo test --workspace
 npm run typecheck
 npm test
 npm run build
+npm run build:installer
 ```

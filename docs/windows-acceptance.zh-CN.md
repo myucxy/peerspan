@@ -18,6 +18,8 @@
 
 ## 1. 构建与驱动安装
 
+专用机优先使用 [Windows 一体化测试安装包](windows-installer.zh-CN.md)。它不要求目标机安装开发环境，并会把应用、WebView2 离线运行时、PeerSpan 驱动、匹配证书与防火墙规则作为一个事务入口安装和卸载。以下独立脚本仅用于驱动开发诊断。
+
 在来源电脑的非管理员终端构建：
 
 ```powershell
@@ -29,7 +31,7 @@ npm run build
 pwsh -File native\idd\build.ps1 -Configuration Release -Platform x64
 ```
 
-确认构建输出没有 InfVerif、Catalog 或签名警告。测试证书信任和驱动安装属于系统变更，只能由测试机管理员审阅脚本后，在提升权限的 PowerShell 中显式执行：
+确认除已审阅的 InfVerif 2084 外没有其他 InfVerif、Catalog 或签名警告。2084 针对 Windows 自带 `WUDFRd.sys` 不在 PeerSpan 的 `CopyFiles` 清单中；Windows 10 下必须使用与系统 `rdpidd.inf` 相同的 `AddService` 模式，项目构建只把该诊断降为消息，不会复制或分发系统驱动。测试证书信任和驱动安装属于系统变更，只能由测试机管理员审阅脚本后，在提升权限的 PowerShell 中显式执行：
 
 ```powershell
 pwsh -File native\idd\install-dev.ps1 `
@@ -96,3 +98,9 @@ pwsh -File native\idd\uninstall-dev.ps1 `
 ```
 
 保存每个矩阵项的构建日志、驱动枚举、两端截图/录像、延迟原始数据、异常恢复次数和失败复现步骤。只有矩阵全部通过后，才能把需求状态中的 IddCx 与真实跨机最后一跳标记为“已完成”。
+
+## 7. 当前专用机记录
+
+2026-08-01，`192.168.9.26` 已通过一体化包完成应用、测试证书、PeerSpan IddCx 驱动和 LocalSubnet 防火墙规则安装。SetupAPI 记录设备配置完成且 `Start` 为 `SUCCESS`；同时活动 RDP 的 `RdpIdd_IndirectDisplay` 以 `PNP_VetoOutstandingOpen` 拒绝显示栈重启并标记 `Device required reboot`。应用在桌面拓扑未出现 PeerSpan 屏幕后按安全逻辑释放了软件设备。
+
+该记录只表示“安装链路通过”，不表示第 2 至第 6 节通过。下一次从此处继续时，先重启专用机，尽量从物理控制台或非 RDP 显示链路启用虚拟屏，然后依次完成 1080p60 拓扑、真实串流、输入、剪贴板、异常恢复和卸载清理。

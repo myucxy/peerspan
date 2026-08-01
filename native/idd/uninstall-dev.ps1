@@ -8,7 +8,11 @@ param(
 
     [switch]$RemoveTestCertificate,
 
-    [switch]$AcknowledgeSystemChanges
+    [switch]$AcknowledgeSystemChanges,
+
+    [switch]$RemoveFirewallRules,
+
+    [switch]$InstallerMode
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,23 +22,70 @@ if (-not $AcknowledgeSystemChanges) {
     throw "This operation removes a machine driver package. Re-run with -AcknowledgeSystemChanges after reviewing the script."
 }
 
+if ($InstallerMode) {
+    $ConfirmPreference = "None"
+}
+
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw "PeerSpan driver removal requires an elevated PowerShell session."
 }
 
-$packages = Get-WindowsDriver -Online -All | Where-Object {
-    $_.ProviderName -eq "PeerSpan Project" -and
-    $_.OriginalFileName -and
-    (Split-Path -Leaf $_.OriginalFileName) -eq "PeerSpanIdd.inf"
+function Resolve-NativeSystemTool([string]$Name) {
+    $candidates = @(
+        (Join-Path $env:WINDIR "Sysnative\$Name"),
+        (Join-Path $env:WINDIR "System32\$Name")
+    )
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return $candidate
+        }
+    }
+    throw "Required Windows system tool was not found: $Name"
 }
 
-foreach ($package in $packages) {
-    if ($PSCmdlet.ShouldProcess($package.Driver, "Uninstall and delete the PeerSpan IddCx driver package")) {
-        & pnputil.exe /delete-driver $package.Driver /uninstall /force
+$pnpUtil = Resolve-NativeSystemTool "pnputil.exe"
+
+function Find-PeerSpanDriverPackagesWithPnpUtil {
+    $output = @(& $pnpUtil /enum-drivers)
+    if ($LASTEXITCODE -ne 0) {
+        throw "pnputil failed to enumerate driver packages (exit code $LASTEXITCODE)."
+    }
+
+    $blocks = ($output -join "`n") -split "(?:\r?\n){2,}"
+    @($blocks | ForEach-Object {
+        $block = $_
+        if ($block -match '(?i)PeerSpan Project' -and
+            $block -match '(?i)\bPeerSpanIdd\.inf\b' -and
+            $block -match '(?i)\b(oem\d+\.inf)\b') {
+            $Matches[1]
+        }
+    } | Sort-Object -Unique)
+}
+
+$packageNames = @()
+if ($PSVersionTable.PSEdition -ne "Core") {
+    try {
+        $packageNames = @(Get-WindowsDriver -Online -All | Where-Object {
+            $_.ProviderName -eq "PeerSpan Project" -and
+            $_.OriginalFileName -and
+            (Split-Path -Leaf $_.OriginalFileName) -eq "PeerSpanIdd.inf"
+        } | ForEach-Object { $_.Driver })
+    } catch {
+        Write-Warning "Get-WindowsDriver is unavailable; falling back to pnputil package enumeration: $($_.Exception.Message)"
+    }
+}
+
+if (-not $packageNames) {
+    $packageNames = @(Find-PeerSpanDriverPackagesWithPnpUtil)
+}
+
+foreach ($packageName in $packageNames) {
+    if ($PSCmdlet.ShouldProcess($packageName, "Uninstall and delete the PeerSpan IddCx driver package")) {
+        & $pnpUtil /delete-driver $packageName /uninstall /force
         if ($LASTEXITCODE -ne 0) {
-            throw "pnputil failed to remove $($package.Driver) (exit code $LASTEXITCODE)."
+            throw "pnputil failed to remove $packageName (exit code $LASTEXITCODE)."
         }
     }
 }
@@ -56,7 +107,16 @@ if ($RemoveTestCertificate) {
     }
 }
 
-if (-not $packages) {
+if ($RemoveFirewallRules) {
+    foreach ($ruleName in @("PeerSpan-LAN-TCP", "PeerSpan-LAN-UDP")) {
+        if ($PSCmdlet.ShouldProcess($ruleName, "Remove the PeerSpan local-subnet firewall rule")) {
+            Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue |
+                Remove-NetFirewallRule -ErrorAction Stop
+        }
+    }
+}
+
+if (-not $packageNames) {
     Write-Output "No installed PeerSpan IddCx driver package was found."
 } else {
     Write-Output "PeerSpan development driver removal completed."
