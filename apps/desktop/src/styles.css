@@ -138,6 +138,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(23, 106, 90,
 
 .readiness-pill, .milestone-pill { display: flex; align-items: center; gap: 7px; padding: 7px 10px; border: 1px solid #ead9c3; border-radius: 20px; color: #85643c; background: #fbf4e9; font-size: 9px; }
 .readiness-pill i { width: 6px; height: 6px; border-radius: 50%; background: #c38b4b; }.readiness-pill.is-ready i { background: #4baa80; }
+.display-heading-actions { display: flex; align-items: center; gap: 9px; }
+.display-heading-actions .secondary-button { min-height: 31px; padding: 0 10px; font-size: 9px; }
+.session-callout { border-color: #c9ded6; color: #336b59; background: #f2f8f5; }
+.session-callout p { color: #638076; }
 .layout-card, .settings-card, .preference-card, .diagnostics-card { border: 1px solid var(--line); border-radius: 15px; background: rgba(255,255,255,.88); box-shadow: 0 8px 26px rgba(28,48,42,.035); }
 .layout-card { padding: 20px; }
 .layout-toolbar { display: flex; align-items: center; justify-content: space-between; }

@@ -1,4 +1,4 @@
-use crate::pairing::CONTROL_PORT;
+use crate::{control::CONTROL_PORT, pairing::PAIRING_PORT};
 use mdns_sd::{ResolvedService, ServiceDaemon, ServiceEvent, ServiceInfo, TxtProperties};
 use peerspan_core::{Capability, DeviceStatus, LocalDevice, PeerDevice, PeerSpanCore};
 use peerspan_protocol::PROTOCOL_VERSION;
@@ -10,7 +10,7 @@ use std::{
 };
 use uuid::Uuid;
 
-const SERVICE_TYPE: &str = "_peerspan._udp.local.";
+const SERVICE_TYPE: &str = "_peerspan._tcp.local.";
 pub struct DiscoveryRuntime {
     daemon: ServiceDaemon,
     service_fullname: String,
@@ -21,6 +21,7 @@ impl DiscoveryRuntime {
         let daemon = ServiceDaemon::new().map_err(|error| error.to_string())?;
         let id = local.id.to_string();
         let protocol = PROTOCOL_VERSION.to_string();
+        let pairing_port = PAIRING_PORT.to_string();
         let hostname = format!("peerspan-{}.local.", &id[..8]);
         let instance_name = format!("{} {}", local.name, &id[..6]);
         let properties = [
@@ -30,6 +31,7 @@ impl DiscoveryRuntime {
             ("fingerprint", local.fingerprint.as_str()),
             ("public_key", local.public_key.as_str()),
             ("protocol", protocol.as_str()),
+            ("pairing_port", pairing_port.as_str()),
         ];
         let service = ServiceInfo::new(
             SERVICE_TYPE,
@@ -149,6 +151,10 @@ fn parse_service_parts(
             .as_millis() as u64,
         addresses,
         control_port,
+        pairing_port: properties
+            .get_property_val_str("pairing_port")
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(PAIRING_PORT),
         protocol_version,
     })
 }
@@ -169,7 +175,8 @@ mod tests {
                 "public_key",
                 "0707070707070707070707070707070707070707070707070707070707070707",
             ),
-            ("protocol", "1"),
+            ("protocol", "2"),
+            ("pairing_port", "37621"),
         ];
         let info = ServiceInfo::new(
             SERVICE_TYPE,
@@ -192,6 +199,7 @@ mod tests {
         .expect("valid advertisement");
         assert_eq!(device.name, "Studio PC");
         assert_eq!(device.control_port, CONTROL_PORT);
+        assert_eq!(device.pairing_port, PAIRING_PORT);
         assert_eq!(device.addresses, ["192.168.1.20"]);
     }
 

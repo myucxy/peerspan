@@ -5,7 +5,7 @@ import { LocalPairingDialog } from "./components/LocalPairingDialog";
 import { Sidebar } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
 import { useAppSnapshot } from "./hooks/useAppSnapshot";
-import { createPairingOffer, isDesktopRuntime, pairDevice, requestSession, type PairingOffer } from "./lib/bridge";
+import { createPairingOffer, endSession, isDesktopRuntime, pairDevice, requestSession, type PairingOffer } from "./lib/bridge";
 import type { PeerDevice, ViewKey } from "./types";
 import { DisplayView } from "./views/DisplayView";
 import { HomeView } from "./views/HomeView";
@@ -42,9 +42,22 @@ export default function App() {
     }
     try {
       await requestSession(device.id);
+      await scan();
+      setActiveView("display");
+      setToast({ tone: "success", message: `已与 ${device.name} 建立认证控制会话` });
     } catch (reason) {
       setToast({ tone: "error", message: String(reason) });
       setActiveView("display");
+    }
+  };
+
+  const stopSession = async (sessionId: string) => {
+    try {
+      await endSession(sessionId);
+      await scan();
+      setToast({ tone: "success", message: "屏幕会话已安全结束" });
+    } catch (reason) {
+      setToast({ tone: "error", message: String(reason) });
     }
   };
 
@@ -89,7 +102,7 @@ export default function App() {
         <Sidebar active={activeView} localDevice={snapshot.localDevice} onNavigate={setActiveView} />
         <main className="content-area">
           {activeView === "home" && <HomeView snapshot={snapshot} scanning={scanning} preview={!isDesktopRuntime()} onScan={() => void scan()} onSelectDevice={(device) => void selectDevice(device)} onOpenDisplay={() => setActiveView("display")} onCreatePairingOffer={() => void showLocalPairingOffer()} />}
-          {activeView === "display" && <DisplayView snapshot={snapshot} onChangePreferences={updatePreferences} />}
+          {activeView === "display" && <DisplayView snapshot={snapshot} onChangePreferences={updatePreferences} onEndSession={stopSession} />}
           {activeView === "nodes" && <NodesView />}
           {activeView === "settings" && <SettingsView snapshot={snapshot} onChangePreferences={updatePreferences} />}
         </main>

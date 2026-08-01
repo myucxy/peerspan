@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
@@ -12,6 +12,8 @@ pub enum ControlMessage {
     PairingRequest(PairingRequest),
     PairingDecision(PairingDecision),
     DisplayOffer(DisplayOffer),
+    DisplayDecision(DisplayDecision),
+    SessionEnd(SessionEnd),
     Input(InputEvent),
     ClipboardText(ClipboardText),
     Heartbeat(Heartbeat),
@@ -48,6 +50,19 @@ pub struct DisplayOffer {
     pub dpi_y: u16,
     pub rotation_degrees: u16,
     pub codec: VideoCodec,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DisplayDecision {
+    pub session_id: Uuid,
+    pub accepted: bool,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionEnd {
+    pub session_id: Uuid,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,5 +134,22 @@ mod tests {
 
         assert_eq!(decoded, message);
         assert!(json.contains("pointer_move"));
+    }
+
+    #[test]
+    fn display_decision_round_trips_with_session_identity() {
+        let session_id = Uuid::new_v4();
+        let message = ControlMessage::DisplayDecision(DisplayDecision {
+            session_id,
+            accepted: false,
+            reason: Some("media pipeline unavailable".into()),
+        });
+
+        let json = serde_json::to_string(&message).expect("message should serialize");
+        let decoded: ControlMessage =
+            serde_json::from_str(&json).expect("message should deserialize");
+
+        assert_eq!(decoded, message);
+        assert!(json.contains(&session_id.to_string()));
     }
 }

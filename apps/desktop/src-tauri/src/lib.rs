@@ -1,7 +1,9 @@
+mod control;
 mod discovery;
 mod identity;
 mod pairing;
 
+use control::{ControlRuntime, mark_control_ready, mark_control_unavailable};
 use discovery::{DiscoveryRuntime, mark_discovery_ready, mark_discovery_unavailable};
 use identity::{DeviceIdentity, load_or_create_identity};
 use pairing::{
@@ -35,9 +37,23 @@ fn update_preferences(
 }
 
 #[tauri::command]
-fn request_display_session(peer_id: String) -> Result<(), String> {
-    Uuid::parse_str(&peer_id).map_err(|_| "Invalid peer device identifier".to_owned())?;
-    Err("The virtual display and authenticated media adapters are not installed yet".into())
+fn request_display_session(
+    runtime: State<'_, ControlRuntime>,
+    peer_id: String,
+) -> Result<peerspan_core::DisplaySession, String> {
+    let peer_id =
+        Uuid::parse_str(&peer_id).map_err(|_| "Invalid peer device identifier".to_owned())?;
+    runtime.request_display_session(peer_id)
+}
+
+#[tauri::command]
+fn end_display_session(
+    runtime: State<'_, ControlRuntime>,
+    session_id: String,
+) -> Result<(), String> {
+    let session_id = Uuid::parse_str(&session_id)
+        .map_err(|_| "Invalid display session identifier".to_owned())?;
+    runtime.end_display_session(session_id)
 }
 
 #[tauri::command]
@@ -82,12 +98,19 @@ pub fn run() {
                 device: local_device.clone(),
                 signing_key: identity.signing_key,
             };
-            match PairingRuntime::start(credentials, Arc::clone(&core)) {
+            match PairingRuntime::start(credentials.clone(), Arc::clone(&core)) {
                 Ok(runtime) => {
                     mark_pairing_ready(&core);
                     app.manage(runtime);
                 }
                 Err(error) => mark_pairing_unavailable(&core, &error),
+            }
+            match ControlRuntime::start(credentials, Arc::clone(&core)) {
+                Ok(runtime) => {
+                    mark_control_ready(&core);
+                    app.manage(runtime);
+                }
+                Err(error) => mark_control_unavailable(&core, &error),
             }
             match DiscoveryRuntime::start(&local_device, Arc::clone(&core)) {
                 Ok(runtime) => {
@@ -106,6 +129,7 @@ pub fn run() {
             create_pairing_offer,
             pair_device,
             request_display_session,
+            end_display_session,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run PeerSpan desktop application");

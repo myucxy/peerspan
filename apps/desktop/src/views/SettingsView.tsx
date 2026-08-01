@@ -55,6 +55,7 @@ export function SettingsView({ snapshot, onChangePreferences }: SettingsViewProp
           <CapabilityRow name="控制桥接" capability={snapshot.capabilities.controlBridge} />
           <CapabilityRow name="局域网发现" capability={snapshot.capabilities.discovery} />
           <CapabilityRow name="安全配对" capability={snapshot.capabilities.securePairing} />
+          <CapabilityRow name="认证控制通道" capability={snapshot.capabilities.secureControl} />
           <CapabilityRow name="虚拟显示器" capability={snapshot.capabilities.virtualDisplay} />
           <CapabilityRow name="媒体管线" capability={snapshot.capabilities.mediaPipeline} />
           <CapabilityRow name="输入注入" capability={snapshot.capabilities.inputInjection} />

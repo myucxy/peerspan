@@ -26,6 +26,8 @@
 
 Windows DPAPI 由操作系统提供，本机身份私钥保护不需要在 `D:\Dev\Env` 追加系统级工具。Rust 绑定由 `windows-sys` 项目依赖锁定并随 Cargo 还原。
 
+TLS 控制通道使用 `rustls`、`rcgen` 和 `x509-parser`。它们都是由 `Cargo.toml` 与 `Cargo.lock` 锁定、通过 Cargo 还原的项目依赖，不需要在 `D:\Dev\Env` 安装额外的 TLS 库或系统工具；其中 `rustls` 使用项目选定的 `ring` 加密提供程序。
+
 ## Rust 环境变量
 
 当前 Rust 使用项目外的固定目录：

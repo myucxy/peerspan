@@ -67,6 +67,106 @@ impl PeerSpanCore {
         Ok(())
     }
 
+    pub fn set_secure_control_capability(&self, capability: Capability) -> Result<(), CoreError> {
+        let mut snapshot = self
+            .snapshot
+            .write()
+            .map_err(|_| CoreError::StatePoisoned)?;
+        snapshot.capabilities.secure_control = capability;
+        Ok(())
+    }
+
+    pub fn set_virtual_display_capability(&self, capability: Capability) -> Result<(), CoreError> {
+        let mut snapshot = self
+            .snapshot
+            .write()
+            .map_err(|_| CoreError::StatePoisoned)?;
+        snapshot.capabilities.virtual_display = capability;
+        Ok(())
+    }
+
+    pub fn set_media_pipeline_capability(&self, capability: Capability) -> Result<(), CoreError> {
+        let mut snapshot = self
+            .snapshot
+            .write()
+            .map_err(|_| CoreError::StatePoisoned)?;
+        snapshot.capabilities.media_pipeline = capability;
+        Ok(())
+    }
+
+    pub fn set_input_injection_capability(&self, capability: Capability) -> Result<(), CoreError> {
+        let mut snapshot = self
+            .snapshot
+            .write()
+            .map_err(|_| CoreError::StatePoisoned)?;
+        snapshot.capabilities.input_injection = capability;
+        Ok(())
+    }
+
+    pub fn start_display_session(&self, session: crate::DisplaySession) -> Result<(), CoreError> {
+        if session.width_px == 0 || session.height_px == 0 || session.refresh_hz == 0 {
+            return Err(CoreError::Validation(
+                "display session dimensions and refresh rate must be non-zero".into(),
+            ));
+        }
+        let mut snapshot = self
+            .snapshot
+            .write()
+            .map_err(|_| CoreError::StatePoisoned)?;
+        if snapshot.active_session.is_some() {
+            return Err(CoreError::ActiveSessionExists);
+        }
+        if !snapshot
+            .trusted_devices
+            .iter()
+            .any(|peer| peer.id == session.peer_id)
+        {
+            return Err(CoreError::PeerNotTrusted);
+        }
+        snapshot.active_session = Some(session);
+        Ok(())
+    }
+
+    pub fn update_display_session(
+        &self,
+        session_id: uuid::Uuid,
+        state: crate::SessionState,
+        latency_ms: Option<u16>,
+    ) -> Result<(), CoreError> {
+        let mut snapshot = self
+            .snapshot
+            .write()
+            .map_err(|_| CoreError::StatePoisoned)?;
+        let session = snapshot
+            .active_session
+            .as_mut()
+            .filter(|session| session.id == session_id)
+            .ok_or(CoreError::SessionNotFound)?;
+        if !valid_session_transition(session.state, state) {
+            return Err(CoreError::InvalidSessionTransition {
+                from: session.state,
+                to: state,
+            });
+        }
+        session.state = state;
+        session.latency_ms = latency_ms;
+        Ok(())
+    }
+
+    pub fn end_display_session(&self, session_id: uuid::Uuid) -> Result<(), CoreError> {
+        let mut snapshot = self
+            .snapshot
+            .write()
+            .map_err(|_| CoreError::StatePoisoned)?;
+        match snapshot.active_session.as_ref() {
+            Some(session) if session.id == session_id => {
+                snapshot.active_session = None;
+                Ok(())
+            }
+            _ => Err(CoreError::SessionNotFound),
+        }
+    }
+
     pub fn upsert_nearby_device(&self, mut device: PeerDevice) -> Result<(), CoreError> {
         let mut snapshot = self
             .snapshot
@@ -76,10 +176,11 @@ impl PeerSpanCore {
             return Ok(());
         }
 
-        device.trusted = snapshot
-            .trusted_devices
-            .iter()
-            .any(|peer| peer.id == device.id);
+        device.trusted = snapshot.trusted_devices.iter().any(|peer| {
+            peer.id == device.id
+                && peer.public_key == device.public_key
+                && peer.fingerprint == device.fingerprint
+        });
         if let Some(existing) = snapshot
             .nearby_devices
             .iter_mut()
@@ -210,6 +311,17 @@ fn validate_preferences(preferences: &Preferences) -> Result<(), CoreError> {
     Ok(())
 }
 
+fn valid_session_transition(current: crate::SessionState, next: crate::SessionState) -> bool {
+    use crate::SessionState::{Ending, Negotiating, Recovering, Streaming};
+    matches!(
+        (current, next),
+        (Negotiating, Negotiating | Streaming | Ending)
+            | (Streaming, Streaming | Recovering | Ending)
+            | (Recovering, Recovering | Streaming | Ending)
+            | (Ending, Ending)
+    )
+}
+
 #[derive(Debug, Error)]
 pub enum CoreError {
     #[error("I/O error: {0}")]
@@ -222,6 +334,17 @@ pub enum CoreError {
     InvalidTrustedDevices(serde_json::Error),
     #[error("invalid setting: {0}")]
     Validation(String),
+    #[error("another display session is already active")]
+    ActiveSessionExists,
+    #[error("display sessions require a trusted peer")]
+    PeerNotTrusted,
+    #[error("display session was not found")]
+    SessionNotFound,
+    #[error("invalid display session transition from {from:?} to {to:?}")]
+    InvalidSessionTransition {
+        from: crate::SessionState,
+        to: crate::SessionState,
+    },
     #[error("application state lock is poisoned")]
     StatePoisoned,
 }
@@ -273,8 +396,9 @@ mod tests {
             latency_ms: Some(8),
             last_seen_unix_ms: 123,
             addresses: vec!["192.168.1.20".into()],
-            control_port: 37_621,
-            protocol_version: 1,
+            control_port: 37_622,
+            pairing_port: 37_621,
+            protocol_version: 2,
         };
         core.trust_device(device.clone()).unwrap();
 
@@ -284,6 +408,93 @@ mod tests {
         assert!(trusted.trusted);
         assert_eq!(trusted.status, crate::DeviceStatus::Offline);
         assert!(trusted.addresses.is_empty());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn changed_discovery_identity_is_not_marked_trusted() {
+        let directory = std::env::temp_dir().join(format!("peerspan-core-{}", Uuid::new_v4()));
+        let core = PeerSpanCore::load(local_device(), &directory).unwrap();
+        let mut device = PeerDevice {
+            id: Uuid::new_v4(),
+            name: "Studio PC".into(),
+            platform: "Windows 11".into(),
+            fingerprint: "AAAA BBBB CCCC".into(),
+            public_key: "07".repeat(32),
+            status: crate::DeviceStatus::Online,
+            trusted: false,
+            latency_ms: None,
+            last_seen_unix_ms: 123,
+            addresses: vec!["192.168.1.20".into()],
+            control_port: 37_622,
+            pairing_port: 37_621,
+            protocol_version: 2,
+        };
+        core.trust_device(device.clone()).unwrap();
+
+        device.public_key = "08".repeat(32);
+        device.fingerprint = "DDDD EEEE FFFF".into();
+        core.upsert_nearby_device(device).unwrap();
+
+        assert!(!core.snapshot().unwrap().nearby_devices[0].trusted);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn display_session_requires_trust_and_enforces_single_active_session() {
+        let directory = std::env::temp_dir().join(format!("peerspan-core-{}", Uuid::new_v4()));
+        let core = PeerSpanCore::load(local_device(), &directory).unwrap();
+        let peer_id = Uuid::new_v4();
+        let session = crate::DisplaySession {
+            id: Uuid::new_v4(),
+            peer_id,
+            direction: crate::SessionDirection::Sending,
+            state: crate::SessionState::Negotiating,
+            width_px: 1920,
+            height_px: 1080,
+            refresh_hz: 60,
+            latency_ms: None,
+        };
+        assert!(matches!(
+            core.start_display_session(session.clone()),
+            Err(CoreError::PeerNotTrusted)
+        ));
+
+        core.trust_device(PeerDevice {
+            id: peer_id,
+            name: "Peer".into(),
+            platform: "Windows".into(),
+            fingerprint: "AAAA BBBB CCCC".into(),
+            public_key: "07".repeat(32),
+            status: crate::DeviceStatus::Online,
+            trusted: true,
+            latency_ms: None,
+            last_seen_unix_ms: 0,
+            addresses: Vec::new(),
+            control_port: 37_622,
+            pairing_port: 37_621,
+            protocol_version: 2,
+        })
+        .unwrap();
+        core.start_display_session(session.clone()).unwrap();
+        assert!(matches!(
+            core.start_display_session(session.clone()),
+            Err(CoreError::ActiveSessionExists)
+        ));
+        core.update_display_session(session.id, crate::SessionState::Streaming, Some(8))
+            .unwrap();
+        assert_eq!(
+            core.snapshot().unwrap().active_session.unwrap().latency_ms,
+            Some(8)
+        );
+        core.update_display_session(session.id, crate::SessionState::Ending, Some(8))
+            .unwrap();
+        assert!(matches!(
+            core.update_display_session(session.id, crate::SessionState::Streaming, Some(8)),
+            Err(CoreError::InvalidSessionTransition { .. })
+        ));
+        core.end_display_session(session.id).unwrap();
+        assert!(core.snapshot().unwrap().active_session.is_none());
         fs::remove_dir_all(directory).unwrap();
     }
 }

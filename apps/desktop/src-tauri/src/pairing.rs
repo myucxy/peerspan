@@ -1,3 +1,4 @@
+use crate::control::CONTROL_PORT;
 use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
     aead::{Aead, KeyInit, Payload},
@@ -21,7 +22,7 @@ use std::{
 };
 use uuid::Uuid;
 
-pub const CONTROL_PORT: u16 = 37_621;
+pub const PAIRING_PORT: u16 = 37_621;
 const OFFER_LIFETIME: Duration = Duration::from_secs(120);
 const MAX_ATTEMPTS: u8 = 5;
 const MAX_FRAME_BYTES: usize = 64 * 1024;
@@ -84,6 +85,7 @@ struct WireIdentity {
     fingerprint: String,
     public_key: String,
     control_port: u16,
+    pairing_port: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,8 +104,8 @@ struct SignedIdentity {
 
 impl PairingRuntime {
     pub fn start(credentials: DeviceCredentials, core: Arc<PeerSpanCore>) -> Result<Self, String> {
-        let listener = TcpListener::bind(("0.0.0.0", CONTROL_PORT))
-            .map_err(|error| format!("cannot bind pairing port {CONTROL_PORT}: {error}"))?;
+        let listener = TcpListener::bind(("0.0.0.0", PAIRING_PORT))
+            .map_err(|error| format!("cannot bind pairing port {PAIRING_PORT}: {error}"))?;
         Self::start_with_listener(credentials, core, listener)
     }
 
@@ -325,6 +327,7 @@ fn sign_identity(
             fingerprint: credentials.device.fingerprint.clone(),
             public_key: credentials.device.public_key.clone(),
             control_port: CONTROL_PORT,
+            pairing_port: PAIRING_PORT,
         },
         transcript_hash,
     };
@@ -386,6 +389,7 @@ fn wire_identity_to_peer(identity: &WireIdentity, addresses: Vec<String>) -> Pee
         last_seen_unix_ms: unix_millis(),
         addresses,
         control_port: identity.control_port,
+        pairing_port: identity.pairing_port,
         protocol_version: PROTOCOL_VERSION,
     }
 }
@@ -396,7 +400,7 @@ fn connect_to_peer(peer: &PeerDevice) -> Result<TcpStream, String> {
         let Ok(ip) = address.parse::<IpAddr>() else {
             continue;
         };
-        let endpoint = SocketAddr::new(ip, peer.control_port);
+        let endpoint = SocketAddr::new(ip, peer.pairing_port);
         match TcpStream::connect_timeout(&endpoint, Duration::from_secs(2)) {
             Ok(stream) => return Ok(stream),
             Err(error) => failures.push(format!("{endpoint}: {error}")),
@@ -634,7 +638,8 @@ mod tests {
             latency_ms: None,
             last_seen_unix_ms: unix_millis(),
             addresses: vec!["127.0.0.1".into()],
-            control_port: port,
+            control_port: port.saturating_add(1),
+            pairing_port: port,
             protocol_version: PROTOCOL_VERSION,
         };
         core_a.upsert_nearby_device(peer_b.clone()).unwrap();

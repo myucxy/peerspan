@@ -1,9 +1,10 @@
-import { Check, ChevronDown, Info, Keyboard, Monitor, MousePointer2, RotateCw, Sparkles } from "lucide-react";
+import { Check, ChevronDown, CircleStop, Info, Keyboard, Monitor, MousePointer2, RotateCw, Sparkles } from "lucide-react";
 import type { AppSnapshot, Preferences, ScreenEdge } from "../types";
 
 interface DisplayViewProps {
   snapshot: AppSnapshot;
   onChangePreferences: (preferences: Preferences) => Promise<void>;
+  onEndSession: (sessionId: string) => Promise<void>;
 }
 
 const edges: Array<{ value: ScreenEdge; label: string }> = [
@@ -13,16 +14,23 @@ const edges: Array<{ value: ScreenEdge; label: string }> = [
   { value: "bottom", label: "下方" },
 ];
 
-export function DisplayView({ snapshot, onChangePreferences }: DisplayViewProps) {
+export function DisplayView({ snapshot, onChangePreferences, onEndSession }: DisplayViewProps) {
   const { preferences } = snapshot;
   const updateEdge = (screenEdge: ScreenEdge) => void onChangePreferences({ ...preferences, screenEdge });
   const driverReady = snapshot.capabilities.virtualDisplay.state === "ready";
+  const session = snapshot.activeSession;
+  const readiness = session
+    ? session.state === "streaming" ? "正在串流" : session.state === "recovering" ? "正在恢复" : "认证会话协商中"
+    : driverReady ? "可以建立会话" : "等待虚拟显示驱动";
 
   return (
     <div className="view-shell display-view">
       <div className="page-heading">
         <div><p className="eyebrow">扩展屏模式</p><h1>屏幕会话</h1><p>定义远端屏幕的位置、分辨率和输入行为。</p></div>
-        <span className={`readiness-pill ${driverReady ? "is-ready" : ""}`}><i />{driverReady ? "可以建立会话" : "等待虚拟显示驱动"}</span>
+        <div className="display-heading-actions">
+          <span className={`readiness-pill ${driverReady || session ? "is-ready" : ""}`}><i />{readiness}</span>
+          {session && <button className="secondary-button" type="button" onClick={() => void onEndSession(session.id)}><CircleStop size={15} />结束会话</button>}
+        </div>
       </div>
 
       <section className="layout-card">
@@ -66,6 +74,7 @@ export function DisplayView({ snapshot, onChangePreferences }: DisplayViewProps)
       </div>
 
       {!driverReady && <div className="info-callout"><Info size={18} /><div><strong>原生图形链路尚未接入</strong><p>当前已经固定 UI、配置和协议边界。安装并验证 IddCx 驱动前，不会提供一个看似成功但没有画面的“开始会话”按钮。</p></div></div>}
+      {session && <div className="info-callout session-callout"><Info size={18} /><div><strong>TLS 1.3 控制通道已认证</strong><p>会话 {session.id.slice(0, 8)} 正在协商 {session.widthPx} × {session.heightPx} · {session.refreshHz} Hz；只有媒体管线确认就绪后才会进入“正在串流”。</p></div></div>}
     </div>
   );
 }

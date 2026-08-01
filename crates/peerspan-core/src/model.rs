@@ -49,7 +49,13 @@ pub struct PeerDevice {
     pub last_seen_unix_ms: u64,
     pub addresses: Vec<String>,
     pub control_port: u16,
+    #[serde(default = "default_pairing_port")]
+    pub pairing_port: u16,
     pub protocol_version: u16,
+}
+
+fn default_pairing_port() -> u16 {
+    37_621
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -136,6 +142,7 @@ pub struct RuntimeCapabilities {
     pub control_bridge: Capability,
     pub discovery: Capability,
     pub secure_pairing: Capability,
+    pub secure_control: Capability,
     pub virtual_display: Capability,
     pub media_pipeline: Capability,
     pub input_injection: Capability,
@@ -147,6 +154,9 @@ impl Default for RuntimeCapabilities {
             control_bridge: Capability::ready("Tauri command bridge is active"),
             discovery: Capability::planned("LAN discovery adapter is not connected yet"),
             secure_pairing: Capability::planned("PAKE pairing listener is not active yet"),
+            secure_control: Capability::planned(
+                "Mutually authenticated TLS control listener is not active yet",
+            ),
             virtual_display: Capability::required(
                 "PeerSpan virtual display driver is not installed",
             ),

@@ -25,6 +25,7 @@ export interface PeerDevice {
   lastSeenUnixMs: number;
   addresses: string[];
   controlPort: number;
+  pairingPort: number;
   protocolVersion: number;
 }
 
@@ -46,6 +47,7 @@ export interface RuntimeCapabilities {
   controlBridge: Capability;
   discovery: Capability;
   securePairing: Capability;
+  secureControl: Capability;
   virtualDisplay: Capability;
   mediaPipeline: Capability;
   inputInjection: Capability;
