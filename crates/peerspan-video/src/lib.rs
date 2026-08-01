@@ -5,7 +5,14 @@
 //! Software transforms are deliberately not accepted by this probe.
 
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use thiserror::Error;
+
+pub const IDD_SHARED_TEXTURE_PREFIX: &str = "Global\\PeerSpan.Idd.Frame.v1";
+
+pub fn idd_shared_texture_name(width: u32, height: u32) -> String {
+    format!("{IDD_SHARED_TEXTURE_PREFIX}.{width}x{height}")
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -95,6 +102,8 @@ pub enum VideoError {
     Codec(String),
     #[error("hardware H.264 codec did not produce output within {0} ms")]
     CodecTimeout(u64),
+    #[error("could not open the IddCx shared D3D11 frame texture: {0}")]
+    SharedTexture(String),
 }
 
 #[cfg(windows)]
@@ -121,6 +130,13 @@ pub struct HardwareH264Encoder {
 pub struct HardwareH264Decoder {
     #[cfg(windows)]
     inner: windows_impl::HardwareH264Decoder,
+}
+
+/// Consumes the IddCx driver's keyed-mutex BGRA texture, converts it to NV12
+/// on the GPU, and emits H.264 access units through the hardware encoder.
+pub struct SharedIddFrameEncoder {
+    #[cfg(windows)]
+    inner: windows_impl::SharedIddFrameEncoder,
 }
 
 impl HardwareH264Encoder {
@@ -187,6 +203,39 @@ impl HardwareH264Decoder {
     }
 }
 
+impl SharedIddFrameEncoder {
+    pub fn open(config: EncoderConfig) -> Result<Self, VideoError> {
+        #[cfg(windows)]
+        {
+            let texture_name = idd_shared_texture_name(config.width, config.height);
+            Ok(Self {
+                inner: windows_impl::SharedIddFrameEncoder::open(config, &texture_name)?,
+            })
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = config;
+            Err(VideoError::UnsupportedPlatform)
+        }
+    }
+
+    pub fn encode_next(
+        &mut self,
+        timestamp_micros: u64,
+        timeout: Duration,
+    ) -> Result<Option<EncodedAccessUnit>, VideoError> {
+        #[cfg(windows)]
+        {
+            self.inner.encode_next(timestamp_micros, timeout)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (timestamp_micros, timeout);
+            Err(VideoError::UnsupportedPlatform)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,6 +274,14 @@ mod tests {
         assert_eq!(config.frames_per_second, 60);
     }
 
+    #[test]
+    fn shared_texture_name_is_bound_to_the_negotiated_mode() {
+        assert_eq!(
+            idd_shared_texture_name(1920, 1080),
+            "Global\\PeerSpan.Idd.Frame.v1.1920x1080"
+        );
+    }
+
     #[cfg(windows)]
     #[test]
     #[ignore = "requires a D3D11-aware hardware H.264 encoder and decoder"]
@@ -258,5 +315,21 @@ mod tests {
             .expect("low-latency decoder should emit the first frame");
         assert_eq!((decoded.width, decoded.height), (640, 360));
         assert_eq!(decoded.bytes.len(), input.len());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires D3D11 video processing and hardware H.264 codecs"]
+    fn gpu_bgra_to_h264_to_nv12_round_trip() {
+        windows_impl::test_gpu_bgra_h264_round_trip()
+            .expect("GPU BGRA conversion and hardware codec round trip should succeed");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires D3D11 shared textures, GPU conversion, and hardware H.264 encoding"]
+    fn keyed_shared_bgra_texture_encodes_without_a_cpu_readback() {
+        windows_impl::test_shared_texture_to_h264_round_trip()
+            .expect("shared keyed texture should encode through the GPU pipeline");
     }
 }

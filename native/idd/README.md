@@ -2,7 +2,9 @@
 
 该目录包含一个可构建的 UMDF 2 间接显示驱动和软件设备控制器。当前原型创建一块稳定标识的虚拟显示器，首选模式为 `1920×1080@60Hz`，并保留 `1600×900@60Hz` 与 `1024×768@60Hz` 回退模式。
 
-驱动的交换链线程目前只正确获取并释放 D3D11 帧，不编码或发送画面。它验证的是 IddCx 枚举、模式协商、帧边界和驱动打包，不能单独完成 PeerSpan 串流会话。
+驱动交换链线程把最新 `DXGI_FORMAT_B8G8R8A8_UNORM` 帧复制到按分辨率命名的 D3D11 NT 共享纹理（例如 `Global\PeerSpan.Idd.Frame.v1.1920x1080`）。keyed mutex 的 key 0 属于驱动、key 1 属于桌面消费者；驱动使用零超时获取 key 0，上一帧未消费时直接丢弃新帧，绝不阻塞 DWM。共享句柄 ACL 只授权 SYSTEM、管理员和交互式用户，不向网络或匿名主体开放。
+
+桌面端取得 key 1 后先做一次进程内 GPU 复制并立刻归还 key 0，再通过 Media Foundation Video Processor 在 GPU 上将 BGRA 转为 NV12 并交给硬件 H.264 编码器；整个发送路径没有 CPU 像素读回。共享纹理、key 交接、GPU 转换和硬件编码已用两个独立 D3D11 设备做自动化实机测试。当前开发机未安装 PeerSpan 驱动，因此真实 IddCx 交换链到桌面进程的最后一跳仍需专用测试机验收。
 
 ## 构建
 
@@ -40,6 +42,6 @@ pwsh -File native\idd\uninstall-dev.ps1 -Configuration Release -Platform x64 `
 
 - 上游提交：`ef7c3074748ab05726c3a9161d3256118efd76e2`
 - 上游许可：Microsoft Public License（见 `LICENSE.MS-PL`）
-- PeerSpan 修改：设备标识、稳定容器 ID、单显示器 1080p60 模式、诊断信息、控制器错误处理和可复现构建脚本
+- PeerSpan 修改：设备标识、稳定容器 ID、单显示器 1080p60 模式、最新帧共享纹理、诊断信息、控制器错误处理和可复现构建脚本
 
 本目录的上游派生代码继续遵循 MS-PL，不受 Rust 工作区的 MIT/Apache-2.0 声明覆盖。

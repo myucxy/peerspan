@@ -16,35 +16,54 @@ use windows::{
                 D3D_FEATURE_LEVEL_11_1,
             },
             Direct3D11::{
-                D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                D3D11_CREATE_DEVICE_FLAG, D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_SDK_VERSION,
-                D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11CreateDevice, ID3D11Device,
+                D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE,
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_FLAG,
+                D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
+                D3D11_USAGE_DEFAULT, D3D11CreateDevice, ID3D11Device, ID3D11Device1,
                 ID3D11DeviceContext, ID3D11Texture2D,
             },
-            Dxgi::Common::{DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC},
+            Dxgi::{
+                Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC},
+                DXGI_ERROR_WAIT_TIMEOUT, DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE,
+                IDXGIKeyedMutex,
+            },
         },
         Media::MediaFoundation::{
-            IMFActivate, IMFDXGIDeviceManager, IMFMediaEventGenerator, IMFSample, IMFTransform,
-            METransformHaveOutput, METransformNeedInput, MF_E_NO_MORE_TYPES,
-            MF_E_TRANSFORM_NEED_MORE_INPUT, MF_E_TRANSFORM_STREAM_CHANGE, MF_EVENT_FLAG_NO_WAIT,
-            MF_LOW_LATENCY, MF_MT_AVG_BITRATE, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE,
-            MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_MPEG2_PROFILE,
-            MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_SA_D3D11_AWARE, MF_TRANSFORM_ASYNC,
-            MF_TRANSFORM_ASYNC_UNLOCK, MF_VERSION, MFCreateDXGIDeviceManager,
-            MFCreateDXGISurfaceBuffer, MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample,
-            MFMediaType_Video, MFSTARTUP_FULL, MFSampleExtension_CleanPoint, MFShutdown, MFStartup,
-            MFT_CATEGORY_VIDEO_DECODER, MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG,
-            MFT_ENUM_FLAG_ALL, MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SORTANDFILTER,
-            MFT_FRIENDLY_NAME_Attribute, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
-            MFT_MESSAGE_NOTIFY_END_OF_STREAM, MFT_MESSAGE_NOTIFY_END_STREAMING,
-            MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_MESSAGE_SET_D3D_MANAGER,
-            MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MFT_REGISTER_TYPE_INFO,
-            MFTEnumEx, MFVideoFormat_H264, MFVideoFormat_NV12, MFVideoInterlace_Progressive,
-            eAVEncH264VProfile_Main,
+            CLSID_VideoProcessorMFT, IMFActivate, IMFDXGIBuffer, IMFDXGIDeviceManager,
+            IMFMediaEventGenerator, IMFSample, IMFTransform, METransformHaveOutput,
+            METransformNeedInput, MF_E_NO_MORE_TYPES, MF_E_TRANSFORM_NEED_MORE_INPUT,
+            MF_E_TRANSFORM_STREAM_CHANGE, MF_EVENT_FLAG_NO_WAIT, MF_LOW_LATENCY,
+            MF_MT_ALL_SAMPLES_INDEPENDENT, MF_MT_AVG_BITRATE, MF_MT_DEFAULT_STRIDE,
+            MF_MT_FIXED_SIZE_SAMPLES, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE,
+            MF_MT_MAJOR_TYPE, MF_MT_MPEG2_PROFILE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SAMPLE_SIZE,
+            MF_MT_SUBTYPE, MF_SA_D3D11_AWARE, MF_TRANSFORM_ASYNC, MF_TRANSFORM_ASYNC_UNLOCK,
+            MF_VERSION, MFCreateDXGIDeviceManager, MFCreateDXGISurfaceBuffer, MFCreateMediaType,
+            MFCreateMemoryBuffer, MFCreateSample, MFMediaType_Video, MFSTARTUP_FULL,
+            MFSampleExtension_CleanPoint, MFShutdown, MFStartup, MFT_CATEGORY_VIDEO_DECODER,
+            MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG, MFT_ENUM_FLAG_ALL, MFT_ENUM_FLAG_HARDWARE,
+            MFT_ENUM_FLAG_SORTANDFILTER, MFT_FRIENDLY_NAME_Attribute,
+            MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_END_OF_STREAM,
+            MFT_MESSAGE_NOTIFY_END_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM,
+            MFT_MESSAGE_SET_D3D_MANAGER, MFT_OUTPUT_DATA_BUFFER,
+            MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MFT_REGISTER_TYPE_INFO, MFTEnumEx,
+            MFVideoFormat_ARGB32, MFVideoFormat_H264, MFVideoFormat_NV12,
+            MFVideoInterlace_Progressive, eAVEncH264VProfile_Main,
         },
-        System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree, CoUninitialize},
+        System::Com::{
+            CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
+            CoTaskMemFree, CoUninitialize,
+        },
     },
-    core::{Error as WindowsError, GUID, Interface, PWSTR},
+    core::{Error as WindowsError, GUID, Interface, PCWSTR, PWSTR},
+};
+
+#[cfg(test)]
+use windows::Win32::{
+    Foundation::{CloseHandle, HANDLE},
+    Graphics::{
+        Direct3D11::{D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX, D3D11_RESOURCE_MISC_SHARED_NTHANDLE},
+        Dxgi::IDXGIResource1,
+    },
 };
 
 const CODEC_EVENT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -299,10 +318,6 @@ impl HardwareH264Encoder {
                 actual: frame.len(),
             });
         }
-        if self.event_generator.is_some() {
-            self.wait_for_need_input()?;
-            self.need_input = false;
-        }
         // SAFETY: `frame` contains one tightly packed NV12 surface. The texture
         // stays alive until the MFT has emitted this frame's output.
         unsafe {
@@ -315,11 +330,21 @@ impl HardwareH264Encoder {
                 0,
             );
         }
-        let sample = create_input_sample(
-            &self.input_texture,
-            timestamp_micros,
-            self.frame_duration_hns,
-        )?;
+        let texture = self.input_texture.clone();
+        self.encode_nv12_texture(&texture, timestamp_micros)
+    }
+
+    fn encode_nv12_texture(
+        &mut self,
+        texture: &ID3D11Texture2D,
+        timestamp_micros: u64,
+    ) -> Result<EncodedAccessUnit, VideoError> {
+        validate_texture(texture, self.width, self.height, DXGI_FORMAT_NV12)?;
+        if self.event_generator.is_some() {
+            self.wait_for_need_input()?;
+            self.need_input = false;
+        }
+        let sample = create_input_sample(texture, timestamp_micros, self.frame_duration_hns)?;
         let transform = self
             .transform
             .as_ref()
@@ -473,6 +498,205 @@ impl Drop for HardwareH264Encoder {
         // Keep these ownership relationships explicit until all COM objects above
         // have been shut down.
         let _ = (&self.device, &self.manager);
+    }
+}
+
+pub struct SharedIddFrameEncoder {
+    source_texture: ID3D11Texture2D,
+    local_texture: ID3D11Texture2D,
+    keyed_mutex: IDXGIKeyedMutex,
+    converter: GpuBgraToNv12,
+    encoder: HardwareH264Encoder,
+}
+
+impl SharedIddFrameEncoder {
+    pub fn open(config: EncoderConfig, texture_name: &str) -> Result<Self, VideoError> {
+        validate_encoder_config(config)?;
+        if texture_name.contains('\0') {
+            return Err(VideoError::SharedTexture(
+                "texture name contains an embedded NUL".into(),
+            ));
+        }
+        let encoder = HardwareH264Encoder::new(config)?;
+        let device1 = encoder
+            .device
+            .cast::<ID3D11Device1>()
+            .map_err(|error| VideoError::SharedTexture(error.to_string()))?;
+        let wide_name: Vec<u16> = texture_name.encode_utf16().chain([0]).collect();
+        let access = DXGI_SHARED_RESOURCE_READ.0 | DXGI_SHARED_RESOURCE_WRITE.0;
+        let source_texture: ID3D11Texture2D =
+            unsafe { device1.OpenSharedResourceByName(PCWSTR(wide_name.as_ptr()), access) }
+                .map_err(|error| VideoError::SharedTexture(error.to_string()))?;
+        validate_texture(
+            &source_texture,
+            config.width,
+            config.height,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+        )?;
+        let keyed_mutex = source_texture
+            .cast::<IDXGIKeyedMutex>()
+            .map_err(|error| VideoError::SharedTexture(error.to_string()))?;
+        let converter = GpuBgraToNv12::new(
+            &encoder.device,
+            &encoder.manager,
+            config.width,
+            config.height,
+            config.frames_per_second,
+        )?;
+        let local_texture = create_texture(
+            &encoder.device,
+            config.width,
+            config.height,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            D3D11_BIND_RENDER_TARGET.0 as u32 | D3D11_BIND_SHADER_RESOURCE.0 as u32,
+            0,
+        )?;
+        Ok(Self {
+            source_texture,
+            local_texture,
+            keyed_mutex,
+            converter,
+            encoder,
+        })
+    }
+
+    pub fn encode_next(
+        &mut self,
+        timestamp_micros: u64,
+        timeout: Duration,
+    ) -> Result<Option<EncodedAccessUnit>, VideoError> {
+        let timeout_ms = timeout.as_millis().min(u128::from(u32::MAX)) as u32;
+        match unsafe { self.keyed_mutex.AcquireSync(1, timeout_ms) } {
+            Ok(()) => {}
+            Err(error) if error.code() == DXGI_ERROR_WAIT_TIMEOUT => return Ok(None),
+            Err(error) => return Err(VideoError::SharedTexture(error.to_string())),
+        }
+        // Copy to a process-local GPU texture and release the shared surface
+        // immediately. Conversion and encoding can then run without making the
+        // IddCx producer wait for key 0.
+        unsafe {
+            self.encoder
+                .context
+                .CopyResource(&self.local_texture, &self.source_texture);
+            self.encoder.context.Flush();
+        }
+        if let Err(error) = unsafe { self.keyed_mutex.ReleaseSync(0) } {
+            return Err(VideoError::SharedTexture(error.to_string()));
+        }
+        let access_unit = (|| {
+            let nv12 = self
+                .converter
+                .convert(&self.local_texture, timestamp_micros)
+                .map_err(|error| {
+                    VideoError::Codec(format!("GPU color conversion failed: {error}"))
+                })?;
+            self.encoder
+                .encode_nv12_texture(&nv12, timestamp_micros)
+                .map_err(|error| VideoError::Codec(format!("hardware encoding failed: {error}")))
+        })()?;
+        Ok(Some(access_unit))
+    }
+}
+
+struct GpuBgraToNv12 {
+    transform: Option<IMFTransform>,
+    output_texture: ID3D11Texture2D,
+    frame_duration_hns: i64,
+}
+
+impl GpuBgraToNv12 {
+    fn new(
+        device: &ID3D11Device,
+        manager: &IMFDXGIDeviceManager,
+        width: u32,
+        height: u32,
+        frames_per_second: u32,
+    ) -> Result<Self, VideoError> {
+        let transform: IMFTransform =
+            unsafe { CoCreateInstance(&CLSID_VideoProcessorMFT, None, CLSCTX_INPROC_SERVER) }
+                .map_err(|error| VideoError::Codec(error.to_string()))?;
+        unsafe {
+            transform.ProcessMessage(
+                MFT_MESSAGE_SET_D3D_MANAGER,
+                Interface::as_raw(manager) as usize,
+            )?;
+        }
+        configure_color_converter_types(&transform, width, height, frames_per_second)?;
+        unsafe {
+            transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
+            transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
+        }
+        let output_texture = create_texture(
+            device,
+            width,
+            height,
+            DXGI_FORMAT_NV12,
+            D3D11_BIND_RENDER_TARGET.0 as u32 | D3D11_BIND_SHADER_RESOURCE.0 as u32,
+            0,
+        )?;
+        Ok(Self {
+            transform: Some(transform),
+            output_texture,
+            frame_duration_hns: 10_000_000_i64 / i64::from(frames_per_second),
+        })
+    }
+
+    fn convert(
+        &mut self,
+        source: &ID3D11Texture2D,
+        timestamp_micros: u64,
+    ) -> Result<ID3D11Texture2D, VideoError> {
+        let transform = self
+            .transform
+            .as_ref()
+            .ok_or_else(|| VideoError::Codec("color converter is already shut down".into()))?;
+        let input_sample = create_input_sample(source, timestamp_micros, self.frame_duration_hns)?;
+        unsafe { transform.ProcessInput(0, &input_sample, 0) }
+            .map_err(|error| VideoError::Codec(error.to_string()))?;
+        let stream_info = unsafe { transform.GetOutputStreamInfo(0) }
+            .map_err(|error| VideoError::Codec(error.to_string()))?;
+        let provides_sample =
+            stream_info.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 as u32 != 0;
+        let output_sample = if provides_sample {
+            None
+        } else {
+            Some(create_input_sample(
+                &self.output_texture,
+                timestamp_micros,
+                self.frame_duration_hns,
+            )?)
+        };
+        let mut output = MFT_OUTPUT_DATA_BUFFER {
+            dwStreamID: 0,
+            pSample: ManuallyDrop::new(output_sample),
+            dwStatus: 0,
+            pEvents: ManuallyDrop::new(None),
+        };
+        let mut status = 0;
+        let process_result =
+            unsafe { transform.ProcessOutput(0, slice::from_mut(&mut output), &mut status) };
+        let sample = unsafe { ManuallyDrop::take(&mut output.pSample) };
+        let events = unsafe { ManuallyDrop::take(&mut output.pEvents) };
+        drop(events);
+        process_result.map_err(|error| VideoError::Codec(error.to_string()))?;
+        if provides_sample {
+            let sample = sample.ok_or_else(|| {
+                VideoError::Codec("video processor returned no output sample".into())
+            })?;
+            texture_from_sample(&sample)
+        } else {
+            drop(sample);
+            Ok(self.output_texture.clone())
+        }
+    }
+}
+
+impl Drop for GpuBgraToNv12 {
+    fn drop(&mut self) {
+        if let Some(transform) = self.transform.take() {
+            let _ = unsafe { transform.ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0) };
+            let _ = unsafe { transform.ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0) };
+        }
     }
 }
 
@@ -933,30 +1157,134 @@ fn select_decoder_output_type(transform: &IMFTransform) -> Result<(), VideoError
     }
 }
 
+fn configure_color_converter_types(
+    transform: &IMFTransform,
+    width: u32,
+    height: u32,
+    frames_per_second: u32,
+) -> Result<(), VideoError> {
+    let input = create_uncompressed_video_type(
+        MFVideoFormat_ARGB32,
+        width,
+        height,
+        frames_per_second,
+        width
+            .checked_mul(4)
+            .ok_or_else(|| VideoError::InvalidConfiguration("BGRA stride overflows".into()))?,
+        width
+            .checked_mul(height)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| VideoError::InvalidConfiguration("BGRA frame size overflows".into()))?,
+    )?;
+    let nv12_bytes = u32::try_from(nv12_frame_bytes(width, height)?)
+        .map_err(|_| VideoError::InvalidConfiguration("NV12 frame size exceeds 4 GiB".into()))?;
+    let output = create_uncompressed_video_type(
+        MFVideoFormat_NV12,
+        width,
+        height,
+        frames_per_second,
+        width,
+        nv12_bytes,
+    )?;
+    unsafe {
+        transform.SetInputType(0, &input, 0)?;
+        transform.SetOutputType(0, &output, 0)?;
+    }
+    Ok(())
+}
+
+fn create_uncompressed_video_type(
+    subtype: GUID,
+    width: u32,
+    height: u32,
+    frames_per_second: u32,
+    stride: u32,
+    sample_size: u32,
+) -> Result<windows::Win32::Media::MediaFoundation::IMFMediaType, VideoError> {
+    let media_type =
+        unsafe { MFCreateMediaType() }.map_err(|error| VideoError::Codec(error.to_string()))?;
+    unsafe {
+        media_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+        media_type.SetGUID(&MF_MT_SUBTYPE, &subtype)?;
+        media_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
+        media_type.SetUINT32(&MF_MT_DEFAULT_STRIDE, stride)?;
+        media_type.SetUINT32(&MF_MT_FIXED_SIZE_SAMPLES, 1)?;
+        media_type.SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
+        media_type.SetUINT32(&MF_MT_SAMPLE_SIZE, sample_size)?;
+        media_type.SetUINT64(&MF_MT_FRAME_SIZE, pack_ratio(width, height))?;
+        media_type.SetUINT64(&MF_MT_FRAME_RATE, pack_ratio(frames_per_second, 1))?;
+        media_type.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, pack_ratio(1, 1))?;
+    }
+    Ok(media_type)
+}
+
 fn create_nv12_texture(
     device: &ID3D11Device,
     width: u32,
     height: u32,
+) -> Result<ID3D11Texture2D, VideoError> {
+    create_texture(
+        device,
+        width,
+        height,
+        DXGI_FORMAT_NV12,
+        D3D11_BIND_RENDER_TARGET.0 as u32 | D3D11_BIND_SHADER_RESOURCE.0 as u32,
+        0,
+    )
+}
+
+fn create_texture(
+    device: &ID3D11Device,
+    width: u32,
+    height: u32,
+    format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT,
+    bind_flags: u32,
+    misc_flags: u32,
 ) -> Result<ID3D11Texture2D, VideoError> {
     let description = D3D11_TEXTURE2D_DESC {
         Width: width,
         Height: height,
         MipLevels: 1,
         ArraySize: 1,
-        Format: DXGI_FORMAT_NV12,
+        Format: format,
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,
             Quality: 0,
         },
         Usage: D3D11_USAGE_DEFAULT,
-        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+        BindFlags: bind_flags,
         CPUAccessFlags: 0,
-        MiscFlags: 0,
+        MiscFlags: misc_flags,
     };
     let mut texture = None;
     unsafe { device.CreateTexture2D(&description, None, Some(&mut texture)) }
         .map_err(|error| VideoError::D3d11(error.to_string()))?;
     texture.ok_or_else(|| VideoError::D3d11("texture creation returned null".into()))
+}
+
+fn validate_texture(
+    texture: &ID3D11Texture2D,
+    width: u32,
+    height: u32,
+    format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT,
+) -> Result<(), VideoError> {
+    let mut description = D3D11_TEXTURE2D_DESC::default();
+    unsafe { texture.GetDesc(&mut description) };
+    if description.Width != width
+        || description.Height != height
+        || description.Format != format
+        || description.SampleDesc.Count != 1
+    {
+        return Err(VideoError::D3d11(format!(
+            "texture contract mismatch: got {}x{} format {:?} samples {}, expected {width}x{height} format {:?} samples 1",
+            description.Width,
+            description.Height,
+            description.Format,
+            description.SampleDesc.Count,
+            format
+        )));
+    }
+    Ok(())
 }
 
 fn create_input_sample(
@@ -978,6 +1306,24 @@ fn create_input_sample(
         sample.SetSampleDuration(duration_hns)?;
     }
     Ok(sample)
+}
+
+fn texture_from_sample(sample: &IMFSample) -> Result<ID3D11Texture2D, VideoError> {
+    let buffer = unsafe { sample.GetBufferByIndex(0) }
+        .map_err(|error| VideoError::Codec(error.to_string()))?;
+    let dxgi_buffer = buffer
+        .cast::<IMFDXGIBuffer>()
+        .map_err(|error| VideoError::Codec(error.to_string()))?;
+    let mut raw = ptr::null_mut();
+    unsafe { dxgi_buffer.GetResource(&ID3D11Texture2D::IID, &mut raw) }
+        .map_err(|error| VideoError::Codec(error.to_string()))?;
+    if raw.is_null() {
+        return Err(VideoError::Codec(
+            "video processor returned a null D3D11 texture".into(),
+        ));
+    }
+    // SAFETY: GetResource returned an owning COM reference for the requested IID.
+    Ok(unsafe { ID3D11Texture2D::from_raw(raw) })
 }
 
 fn create_compressed_sample(
@@ -1019,6 +1365,154 @@ fn create_compressed_sample(
 
 fn pack_ratio(numerator: u32, denominator: u32) -> u64 {
     (u64::from(numerator) << 32) | u64::from(denominator)
+}
+
+#[cfg(test)]
+pub(crate) fn test_gpu_bgra_h264_round_trip() -> Result<(), VideoError> {
+    let config = EncoderConfig {
+        width: 640,
+        height: 360,
+        frames_per_second: 60,
+        bitrate: 4_000_000,
+    };
+    let mut encoder = HardwareH264Encoder::new(config)?;
+    let source = create_texture(
+        &encoder.device,
+        config.width,
+        config.height,
+        DXGI_FORMAT_B8G8R8A8_UNORM,
+        D3D11_BIND_RENDER_TARGET.0 as u32 | D3D11_BIND_SHADER_RESOURCE.0 as u32,
+        0,
+    )?;
+    let pixels = usize::try_from(config.width)
+        .ok()
+        .and_then(|width| {
+            usize::try_from(config.height)
+                .ok()
+                .and_then(|height| width.checked_mul(height))
+        })
+        .ok_or_else(|| VideoError::InvalidConfiguration("BGRA frame size overflows".into()))?;
+    let mut bgra = vec![0_u8; pixels * 4];
+    for pixel in bgra.chunks_exact_mut(4) {
+        pixel.copy_from_slice(&[48, 96, 192, 255]);
+    }
+    unsafe {
+        encoder.context.UpdateSubresource(
+            &source,
+            0,
+            None,
+            bgra.as_ptr().cast(),
+            config.width * 4,
+            0,
+        );
+    }
+    let mut converter = GpuBgraToNv12::new(
+        &encoder.device,
+        &encoder.manager,
+        config.width,
+        config.height,
+        config.frames_per_second,
+    )?;
+    let nv12 = converter.convert(&source, 0)?;
+    let access_unit = encoder.encode_nv12_texture(&nv12, 0)?;
+    let mut decoder = HardwareH264Decoder::new(DecoderConfig {
+        width: config.width,
+        height: config.height,
+        frames_per_second: config.frames_per_second,
+    })?;
+    let decoded = decoder
+        .decode(&access_unit.bytes, 0)?
+        .ok_or_else(|| VideoError::Codec("decoder buffered the GPU-converted keyframe".into()))?;
+    if decoded.bytes.len() != nv12_frame_bytes(config.width, config.height)? {
+        return Err(VideoError::Codec(
+            "decoded GPU-converted frame has the wrong size".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn test_shared_texture_to_h264_round_trip() -> Result<(), VideoError> {
+    struct SharedHandle(HANDLE);
+    impl Drop for SharedHandle {
+        fn drop(&mut self) {
+            if !self.0.is_invalid() {
+                let _ = unsafe { CloseHandle(self.0) };
+            }
+        }
+    }
+
+    let config = EncoderConfig {
+        width: 640,
+        height: 360,
+        frames_per_second: 60,
+        bitrate: 4_000_000,
+    };
+    let producer = create_video_device()?;
+    let misc_flags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE.0 as u32
+        | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX.0 as u32;
+    let source = create_texture(
+        &producer.device,
+        config.width,
+        config.height,
+        DXGI_FORMAT_B8G8R8A8_UNORM,
+        D3D11_BIND_RENDER_TARGET.0 as u32 | D3D11_BIND_SHADER_RESOURCE.0 as u32,
+        misc_flags,
+    )?;
+    let resource = source
+        .cast::<IDXGIResource1>()
+        .map_err(|error| VideoError::SharedTexture(error.to_string()))?;
+    let producer_mutex = source
+        .cast::<IDXGIKeyedMutex>()
+        .map_err(|error| VideoError::SharedTexture(error.to_string()))?;
+    let name = format!(
+        "Local\\PeerSpan.SharedFrame.Test.{}.{}",
+        std::process::id(),
+        Instant::now().elapsed().as_nanos()
+    );
+    let wide_name: Vec<u16> = name.encode_utf16().chain([0]).collect();
+    let access = DXGI_SHARED_RESOURCE_READ.0 | DXGI_SHARED_RESOURCE_WRITE.0;
+    let handle = unsafe { resource.CreateSharedHandle(None, access, PCWSTR(wide_name.as_ptr())) }
+        .map_err(|error| VideoError::SharedTexture(error.to_string()))?;
+    let _handle = SharedHandle(handle);
+    let mut consumer = SharedIddFrameEncoder::open(config, &name)?;
+
+    unsafe { producer_mutex.AcquireSync(0, 1000) }
+        .map_err(|error| VideoError::SharedTexture(error.to_string()))?;
+    let pixels = usize::try_from(config.width)
+        .ok()
+        .and_then(|width| {
+            usize::try_from(config.height)
+                .ok()
+                .and_then(|height| width.checked_mul(height))
+        })
+        .ok_or_else(|| VideoError::InvalidConfiguration("BGRA frame size overflows".into()))?;
+    let mut bgra = vec![0_u8; pixels * 4];
+    for pixel in bgra.chunks_exact_mut(4) {
+        pixel.copy_from_slice(&[24, 128, 224, 255]);
+    }
+    unsafe {
+        producer.context.UpdateSubresource(
+            &source,
+            0,
+            None,
+            bgra.as_ptr().cast(),
+            config.width * 4,
+            0,
+        );
+        producer.context.Flush();
+        producer_mutex.ReleaseSync(1)?;
+    }
+
+    let access_unit = consumer
+        .encode_next(0, Duration::from_secs(1))?
+        .ok_or_else(|| VideoError::SharedTexture("consumer timed out waiting for key 1".into()))?;
+    if access_unit.bytes.is_empty() || !access_unit.keyframe {
+        return Err(VideoError::Codec(
+            "shared texture did not produce an H.264 keyframe".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn enumerate_transform(

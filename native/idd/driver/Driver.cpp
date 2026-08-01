@@ -5,7 +5,7 @@ Copyright (c) Microsoft Corporation
 Abstract:
 
     Adapted from Microsoft's Indirect Display Driver sample for the PeerSpan virtual display prototype.
-    The swap-chain processing loop intentionally remains a frame-consumer boundary until the media pipeline is wired.
+    The swap-chain processing loop publishes the newest frame through a bounded cross-process D3D11 texture.
 
     MSDN documentation on indirect displays can be found at https://msdn.microsoft.com/en-us/library/windows/hardware/mt761968(v=vs.85).aspx.
 
@@ -21,6 +21,10 @@ Environment:
 using namespace std;
 using namespace Microsoft::IndirectDisp;
 using namespace Microsoft::WRL;
+
+static constexpr wchar_t PEERSPAN_SHARED_FRAME_PREFIX[] = L"Global\\PeerSpan.Idd.Frame.v1";
+static constexpr wchar_t PEERSPAN_SHARED_FRAME_SDDL[] =
+    L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;IU)";
 
 #pragma region PeerSpanMonitors
 
@@ -342,6 +346,8 @@ SwapChainProcessor::~SwapChainProcessor()
         // Wait for the thread to terminate
         WaitForSingleObject(m_hThread.Get(), INFINITE);
     }
+
+    ResetSharedFrameTexture();
 }
 
 DWORD CALLBACK SwapChainProcessor::RunThread(LPVOID Argument)
@@ -427,16 +433,12 @@ void SwapChainProcessor::RunCore()
             // We have new frame to process, the surface has a reference on it that the driver has to release
             AcquiredBuffer.Attach(Buffer.MetaData.pSurface);
 
-            // ==============================
-            // TODO: Process the frame here
-            //
-            // This is the most performance-critical section of code in an IddCx driver. It's important that whatever
-            // is done with the acquired surface be finished as quickly as possible. This operation could be:
-            //  * a GPU copy to another buffer surface for later processing (such as a staging surface for mapping to CPU memory)
-            //  * a GPU encode operation
-            //  * a GPU VPBlt to another surface
-            //  * a GPU custom compute shader encode operation
-            // ==============================
+            // Publish only the newest frame to a cross-process D3D11 texture. The
+            // keyed mutex uses key 0 for the driver and key 1 for the desktop
+            // consumer. AcquireSync never waits here: if the previous frame has
+            // not been consumed, this frame is deliberately dropped rather than
+            // blocking DWM or building latency.
+            PublishFrame(AcquiredBuffer.Get());
 
             // We have finished processing this frame hence we release the reference on it.
             // If the driver forgets to release the reference to the surface, it will be leaked which results in the
@@ -468,6 +470,140 @@ void SwapChainProcessor::RunCore()
             break;
         }
     }
+}
+
+HRESULT SwapChainProcessor::PublishFrame(IDXGIResource* AcquiredBuffer)
+{
+    ComPtr<ID3D11Texture2D> SourceTexture;
+    HRESULT hr = AcquiredBuffer->QueryInterface(IID_PPV_ARGS(&SourceTexture));
+    if (FAILED(hr))
+    {
+        return hr;
+    }
+
+    hr = EnsureSharedFrameTexture(SourceTexture.Get());
+    if (FAILED(hr))
+    {
+        return hr;
+    }
+
+    hr = m_SharedFrameMutex->AcquireSync(0, 0);
+    if (FAILED(hr))
+    {
+        return hr;
+    }
+
+    m_Device->DeviceContext->CopyResource(m_SharedFrameTexture.Get(), SourceTexture.Get());
+    m_Device->DeviceContext->Flush();
+    HRESULT releaseResult = m_SharedFrameMutex->ReleaseSync(1);
+    return FAILED(releaseResult) ? releaseResult : S_OK;
+}
+
+HRESULT SwapChainProcessor::EnsureSharedFrameTexture(ID3D11Texture2D* SourceTexture)
+{
+    D3D11_TEXTURE2D_DESC SourceDescription = {};
+    SourceTexture->GetDesc(&SourceDescription);
+    if (SourceDescription.Format != DXGI_FORMAT_B8G8R8A8_UNORM ||
+        SourceDescription.SampleDesc.Count != 1)
+    {
+        return DXGI_ERROR_UNSUPPORTED;
+    }
+
+    if (m_SharedFrameTexture &&
+        m_SharedFrameDescription.Width == SourceDescription.Width &&
+        m_SharedFrameDescription.Height == SourceDescription.Height &&
+        m_SharedFrameDescription.Format == SourceDescription.Format)
+    {
+        return S_OK;
+    }
+
+    ResetSharedFrameTexture();
+    D3D11_TEXTURE2D_DESC SharedDescription = SourceDescription;
+    SharedDescription.MipLevels = 1;
+    SharedDescription.ArraySize = 1;
+    SharedDescription.Usage = D3D11_USAGE_DEFAULT;
+    SharedDescription.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    SharedDescription.CPUAccessFlags = 0;
+    SharedDescription.MiscFlags =
+        D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+
+    HRESULT hr = m_Device->Device->CreateTexture2D(
+        &SharedDescription,
+        nullptr,
+        &m_SharedFrameTexture);
+    if (FAILED(hr))
+    {
+        ResetSharedFrameTexture();
+        return hr;
+    }
+
+    ComPtr<IDXGIResource1> SharedResource;
+    hr = m_SharedFrameTexture.As(&SharedResource);
+    if (FAILED(hr))
+    {
+        ResetSharedFrameTexture();
+        return hr;
+    }
+    hr = m_SharedFrameTexture.As(&m_SharedFrameMutex);
+    if (FAILED(hr))
+    {
+        ResetSharedFrameTexture();
+        return hr;
+    }
+
+    PSECURITY_DESCRIPTOR SecurityDescriptor = nullptr;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            PEERSPAN_SHARED_FRAME_SDDL,
+            SDDL_REVISION_1,
+            &SecurityDescriptor,
+            nullptr))
+    {
+        hr = HRESULT_FROM_WIN32(GetLastError());
+        ResetSharedFrameTexture();
+        return hr;
+    }
+
+    SECURITY_ATTRIBUTES SecurityAttributes = {};
+    SecurityAttributes.nLength = sizeof(SecurityAttributes);
+    SecurityAttributes.lpSecurityDescriptor = SecurityDescriptor;
+    SecurityAttributes.bInheritHandle = FALSE;
+    wchar_t SharedFrameName[128] = {};
+    hr = StringCchPrintfW(
+        SharedFrameName,
+        ARRAYSIZE(SharedFrameName),
+        L"%s.%lux%lu",
+        PEERSPAN_SHARED_FRAME_PREFIX,
+        SharedDescription.Width,
+        SharedDescription.Height);
+    if (SUCCEEDED(hr))
+    {
+        hr = SharedResource->CreateSharedHandle(
+            &SecurityAttributes,
+            DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
+            SharedFrameName,
+            &m_hSharedFrameHandle);
+    }
+    LocalFree(SecurityDescriptor);
+    if (FAILED(hr))
+    {
+        ResetSharedFrameTexture();
+        return hr;
+    }
+
+    m_SharedFrameDescription = SharedDescription;
+    return S_OK;
+}
+
+void SwapChainProcessor::ResetSharedFrameTexture()
+{
+    m_SharedFrameMutex.Reset();
+    m_SharedFrameTexture.Reset();
+    if (m_hSharedFrameHandle)
+    {
+        CloseHandle(m_hSharedFrameHandle);
+        m_hSharedFrameHandle = nullptr;
+    }
+    m_SharedFrameDescription = {};
 }
 
 #pragma endregion

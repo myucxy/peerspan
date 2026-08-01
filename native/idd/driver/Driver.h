@@ -10,6 +10,8 @@
 #include <dxgi1_5.h>
 #include <d3d11_2.h>
 #include <avrt.h>
+#include <sddl.h>
+#include <strsafe.h>
 #include <wrl.h>
 
 #include <memory>
@@ -80,12 +82,19 @@ namespace Microsoft
 
             void Run();
             void RunCore();
+            HRESULT PublishFrame(IDXGIResource* AcquiredBuffer);
+            HRESULT EnsureSharedFrameTexture(ID3D11Texture2D* SourceTexture);
+            void ResetSharedFrameTexture();
 
             IDDCX_SWAPCHAIN m_hSwapChain;
             std::shared_ptr<Direct3DDevice> m_Device;
             HANDLE m_hAvailableBufferEvent;
             Microsoft::WRL::Wrappers::Thread m_hThread;
             Microsoft::WRL::Wrappers::Event m_hTerminateEvent;
+            Microsoft::WRL::ComPtr<ID3D11Texture2D> m_SharedFrameTexture;
+            Microsoft::WRL::ComPtr<IDXGIKeyedMutex> m_SharedFrameMutex;
+            HANDLE m_hSharedFrameHandle = nullptr;
+            D3D11_TEXTURE2D_DESC m_SharedFrameDescription = {};
         };
 
         /// <summary>
