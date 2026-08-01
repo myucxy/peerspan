@@ -32,7 +32,7 @@ TLS 控制通道使用 `rustls`、`rcgen` 和 `x509-parser`。它们都是由 `C
 
 媒体数据报核心使用 Cargo 管理的 `chacha20poly1305`、`socket2` 和 `zeroize`，不需要新增系统环境；Windows 套接字缓冲调整仍由操作系统 API 完成。
 
-Windows 视频能力探测使用 Cargo 管理的 `windows` crate 调用系统自带 D3D11 与 Media Foundation，不需要向 `D:\Dev\Env` 安装额外 SDK。独立探测命令为 `cargo run -p peerspan-video --example probe`；2026-08-01 在当前 Windows 10 22H2 开发机上确认 D3D 11.1、`NVIDIA H.264 Encoder MFT` 与 `Microsoft H264 Video Decoder MFT` 均为 D3D11-aware。
+Windows 视频管线使用 Cargo 管理的 `windows` crate 调用系统自带 D3D11 与 Media Foundation，不需要向 `D:\Dev\Env` 安装额外 SDK。独立探测命令为 `cargo run -p peerspan-video --example probe`；2026-08-01 在当前 Windows 10 22H2 开发机上确认 D3D 11.1、`NVIDIA H.264 Encoder MFT` 与 `Microsoft H264 Video Decoder MFT` 均为 D3D11-aware，并完成 640×360 NV12 → 硬件 H.264 关键帧 → D3D11 解码 NV12 的实机闭环。对应硬件测试可用 `cargo test -p peerspan-video -- --ignored` 重跑。
 
 ## Rust 环境变量
 
