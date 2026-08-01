@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
@@ -57,6 +57,7 @@ pub struct DisplayDecision {
     pub session_id: Uuid,
     pub accepted: bool,
     pub reason: Option<String>,
+    pub media_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -143,6 +144,7 @@ mod tests {
             session_id,
             accepted: false,
             reason: Some("media pipeline unavailable".into()),
+            media_port: None,
         });
 
         let json = serde_json::to_string(&message).expect("message should serialize");
@@ -151,5 +153,23 @@ mod tests {
 
         assert_eq!(decoded, message);
         assert!(json.contains(&session_id.to_string()));
+    }
+
+    #[test]
+    fn accepted_display_decision_carries_the_media_endpoint() {
+        let session_id = Uuid::new_v4();
+        let message = ControlMessage::DisplayDecision(DisplayDecision {
+            session_id,
+            accepted: true,
+            reason: None,
+            media_port: Some(49_152),
+        });
+
+        let json = serde_json::to_string(&message).expect("message should serialize");
+        let decoded: ControlMessage =
+            serde_json::from_str(&json).expect("message should deserialize");
+
+        assert_eq!(decoded, message);
+        assert!(json.contains("49152"));
     }
 }

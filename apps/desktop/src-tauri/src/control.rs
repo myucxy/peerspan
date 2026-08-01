@@ -4,6 +4,7 @@ use peerspan_core::{
     Capability, CapabilityState, DeviceStatus, DisplaySession, PeerDevice, PeerSpanCore,
     SessionDirection, SessionState,
 };
+use peerspan_media::{MediaKeyMaterial, UdpMediaReceiver, UdpMediaSender};
 use peerspan_protocol::{
     ControlMessage, DisplayDecision, DisplayOffer, Heartbeat, Hello, PROTOCOL_VERSION, SessionEnd,
     VideoCodec,
@@ -42,7 +43,8 @@ use uuid::Uuid;
 use x509_parser::{oid_registry::OID_SIG_ED25519, parse_x509_certificate};
 
 pub const CONTROL_PORT: u16 = 37_622;
-const ALPN_PROTOCOL: &[u8] = b"peerspan-control/2";
+const ALPN_PROTOCOL: &[u8] = b"peerspan-control/3";
+const MEDIA_EXPORTER_LABEL: &[u8] = b"EXPORTER-PeerSpan-media-v3";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const SESSION_IO_TIMEOUT: Duration = Duration::from_secs(1);
@@ -52,6 +54,30 @@ const MAX_SERVER_WORKERS: usize = 32;
 
 type ClientTlsStream = StreamOwned<ClientConnection, TcpStream>;
 type ServerTlsStream = StreamOwned<ServerConnection, TcpStream>;
+type ActiveMediaMap = Arc<Mutex<HashMap<Uuid, Arc<Mutex<ActiveMediaEndpoint>>>>>;
+
+enum ActiveMediaEndpoint {
+    Sender(Box<UdpMediaSender>),
+    Receiver(Box<UdpMediaReceiver>),
+}
+
+impl ActiveMediaEndpoint {
+    fn local_addr(&self) -> Result<SocketAddr, String> {
+        match self {
+            Self::Sender(sender) => sender.local_addr().map_err(|error| error.to_string()),
+            Self::Receiver(receiver) => receiver.local_addr().map_err(|error| error.to_string()),
+        }
+    }
+}
+
+struct IncomingContext<'a> {
+    credentials: &'a DeviceCredentials,
+    core: &'a PeerSpanCore,
+    config: Arc<ServerConfig>,
+    runtime_shutdown: &'a AtomicBool,
+    active_signals: &'a Mutex<HashMap<Uuid, Arc<AtomicBool>>>,
+    active_media: &'a ActiveMediaMap,
+}
 
 pub struct ControlRuntime {
     credentials: DeviceCredentials,
@@ -59,6 +85,7 @@ pub struct ControlRuntime {
     tls_identity: TlsIdentity,
     shutdown: Arc<AtomicBool>,
     active_signals: Arc<Mutex<HashMap<Uuid, Arc<AtomicBool>>>>,
+    active_media: ActiveMediaMap,
     listener_worker: Mutex<Option<thread::JoinHandle<()>>>,
     server_workers: Arc<Mutex<Vec<thread::JoinHandle<()>>>>,
     client_workers: Mutex<Vec<thread::JoinHandle<()>>>,
@@ -208,10 +235,12 @@ impl ControlRuntime {
         let server_config = Arc::new(server_config(&tls_identity, Arc::clone(&core))?);
         let shutdown = Arc::new(AtomicBool::new(false));
         let active_signals = Arc::new(Mutex::new(HashMap::new()));
+        let active_media = Arc::new(Mutex::new(HashMap::new()));
         let server_workers = Arc::new(Mutex::new(Vec::new()));
 
         let listener_shutdown = Arc::clone(&shutdown);
         let listener_signals = Arc::clone(&active_signals);
+        let listener_media = Arc::clone(&active_media);
         let listener_workers = Arc::clone(&server_workers);
         let listener_credentials = credentials.clone();
         let listener_core = Arc::clone(&core);
@@ -232,6 +261,7 @@ impl ControlRuntime {
                             }
                             let worker_shutdown = Arc::clone(&listener_shutdown);
                             let worker_signals = Arc::clone(&listener_signals);
+                            let worker_media = Arc::clone(&listener_media);
                             let worker_credentials = listener_credentials.clone();
                             let worker_core = Arc::clone(&listener_core);
                             let worker_config = Arc::clone(&listener_config);
@@ -241,11 +271,14 @@ impl ControlRuntime {
                                     if let Err(_error) = handle_incoming(
                                         stream,
                                         remote,
-                                        &worker_credentials,
-                                        &worker_core,
-                                        worker_config,
-                                        &worker_shutdown,
-                                        &worker_signals,
+                                        IncomingContext {
+                                            credentials: &worker_credentials,
+                                            core: &worker_core,
+                                            config: worker_config,
+                                            runtime_shutdown: &worker_shutdown,
+                                            active_signals: &worker_signals,
+                                            active_media: &worker_media,
+                                        },
                                     ) {
                                         #[cfg(test)]
                                         eprintln!("TLS control connection failed: {_error}");
@@ -272,6 +305,7 @@ impl ControlRuntime {
             tls_identity,
             shutdown,
             active_signals,
+            active_media,
             listener_worker: Mutex::new(Some(listener_worker)),
             server_workers,
             client_workers: Mutex::new(Vec::new()),
@@ -338,6 +372,35 @@ impl ControlRuntime {
                 .reason
                 .unwrap_or_else(|| "The peer declined the display session".into()));
         }
+        let media_port = decision
+            .media_port
+            .filter(|port| *port != 0)
+            .ok_or_else(|| {
+                "The peer accepted the session without a UDP media endpoint".to_owned()
+            })?;
+        let peer_media_address = SocketAddr::new(
+            channel
+                .sock
+                .peer_addr()
+                .map_err(|error| error.to_string())?
+                .ip(),
+            media_port,
+        );
+        let media_key = export_client_media_key(&channel.conn, session.id)?;
+        let media_sender = UdpMediaSender::connect(
+            unspecified_address(peer_media_address),
+            peer_media_address,
+            session.id,
+            media_key,
+        )
+        .map_err(|error| error.to_string())?;
+        let media_endpoint = Arc::new(Mutex::new(ActiveMediaEndpoint::Sender(Box::new(
+            media_sender,
+        ))));
+        media_endpoint
+            .lock()
+            .map_err(|_| "media endpoint lock is poisoned")?
+            .local_addr()?;
 
         channel
             .sock
@@ -360,8 +423,19 @@ impl ControlRuntime {
                 return Err("control session lock is poisoned".into());
             }
         }
+        match self.active_media.lock() {
+            Ok(mut media) => {
+                media.insert(session.id, media_endpoint);
+            }
+            Err(_) => {
+                remove_session(&self.active_signals, session.id);
+                let _ = self.core.end_display_session(session.id);
+                return Err("media session lock is poisoned".into());
+            }
+        }
         let worker_core = Arc::clone(&self.core);
         let worker_signals = Arc::clone(&self.active_signals);
+        let worker_media = Arc::clone(&self.active_media);
         let worker_shutdown = Arc::clone(&self.shutdown);
         let session_id = session.id;
         let worker = thread::Builder::new()
@@ -369,11 +443,13 @@ impl ControlRuntime {
             .spawn(move || {
                 run_client_session(channel, &worker_core, session_id, &worker_shutdown, &signal);
                 remove_session(&worker_signals, session_id);
+                remove_media(&worker_media, session_id);
             });
         let worker = match worker {
             Ok(worker) => worker,
             Err(error) => {
                 remove_session(&self.active_signals, session.id);
+                remove_media(&self.active_media, session.id);
                 let _ = self.core.end_display_session(session.id);
                 return Err(error.to_string());
             }
@@ -383,6 +459,58 @@ impl ControlRuntime {
             .map_err(|_| "control worker lock is poisoned")?
             .push(worker);
         Ok(session)
+    }
+
+    #[cfg(test)]
+    fn send_test_media(
+        &self,
+        session_id: Uuid,
+        frame_id: u64,
+        payload: &[u8],
+    ) -> Result<peerspan_media::SendStats, String> {
+        let endpoint = self
+            .active_media
+            .lock()
+            .map_err(|_| "media session lock is poisoned")?
+            .get(&session_id)
+            .cloned()
+            .ok_or_else(|| "media session is not active".to_owned())?;
+        let mut endpoint = endpoint
+            .lock()
+            .map_err(|_| "media endpoint lock is poisoned")?;
+        match &mut *endpoint {
+            ActiveMediaEndpoint::Sender(sender) => sender
+                .send_frame(frame_id, frame_id * 16_667, frame_id == 0, payload)
+                .map_err(|error| error.to_string()),
+            ActiveMediaEndpoint::Receiver(_) => {
+                Err("the receiving side cannot send encoded video".into())
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn receive_test_media(
+        &self,
+        session_id: Uuid,
+    ) -> Result<Option<peerspan_media::EncodedFrame>, String> {
+        let endpoint = self
+            .active_media
+            .lock()
+            .map_err(|_| "media session lock is poisoned")?
+            .get(&session_id)
+            .cloned()
+            .ok_or_else(|| "media session is not active".to_owned())?;
+        let mut endpoint = endpoint
+            .lock()
+            .map_err(|_| "media endpoint lock is poisoned")?;
+        match &mut *endpoint {
+            ActiveMediaEndpoint::Receiver(receiver) => receiver
+                .receive_once(Instant::now())
+                .map_err(|error| error.to_string()),
+            ActiveMediaEndpoint::Sender(_) => {
+                Err("the sending side cannot receive encoded video".into())
+            }
+        }
     }
 
     pub fn end_display_session(&self, session_id: Uuid) -> Result<(), String> {
@@ -634,15 +762,55 @@ fn connect_tls(
     }
 }
 
+fn export_client_media_key(
+    connection: &ClientConnection,
+    session_id: Uuid,
+) -> Result<MediaKeyMaterial, String> {
+    let exporter = connection
+        .export_keying_material(
+            [0_u8; MediaKeyMaterial::EXPORTER_BYTES],
+            MEDIA_EXPORTER_LABEL,
+            Some(session_id.as_bytes()),
+        )
+        .map_err(|error| format!("could not export the TLS media key: {error}"))?;
+    Ok(MediaKeyMaterial::from_exporter(exporter))
+}
+
+fn export_server_media_key(
+    connection: &ServerConnection,
+    session_id: Uuid,
+) -> Result<MediaKeyMaterial, String> {
+    let exporter = connection
+        .export_keying_material(
+            [0_u8; MediaKeyMaterial::EXPORTER_BYTES],
+            MEDIA_EXPORTER_LABEL,
+            Some(session_id.as_bytes()),
+        )
+        .map_err(|error| format!("could not export the TLS media key: {error}"))?;
+    Ok(MediaKeyMaterial::from_exporter(exporter))
+}
+
+fn unspecified_address(peer: SocketAddr) -> SocketAddr {
+    if peer.is_ipv4() {
+        SocketAddr::from(([0, 0, 0, 0], 0))
+    } else {
+        SocketAddr::from(([0_u16; 8], 0))
+    }
+}
+
 fn handle_incoming(
     stream: TcpStream,
-    _remote: SocketAddr,
-    credentials: &DeviceCredentials,
-    core: &Arc<PeerSpanCore>,
-    config: Arc<ServerConfig>,
-    runtime_shutdown: &Arc<AtomicBool>,
-    active_signals: &Arc<Mutex<HashMap<Uuid, Arc<AtomicBool>>>>,
+    remote: SocketAddr,
+    context: IncomingContext<'_>,
 ) -> Result<(), String> {
+    let IncomingContext {
+        credentials,
+        core,
+        config,
+        runtime_shutdown,
+        active_signals,
+        active_media,
+    } = context;
     configure_stream(&stream, HANDSHAKE_TIMEOUT)?;
     let connection = ServerConnection::new(config).map_err(|error| error.to_string())?;
     let mut channel = StreamOwned::new(connection, stream);
@@ -687,6 +855,7 @@ fn handle_incoming(
                 session_id: offer.session_id,
                 accepted: false,
                 reason: Some(reason),
+                media_port: None,
             }),
         )?;
         return Ok(());
@@ -700,6 +869,37 @@ fn handle_incoming(
         .sock
         .set_write_timeout(Some(SESSION_IO_TIMEOUT))
         .map_err(|error| error.to_string())?;
+    let media_key = export_server_media_key(&channel.conn, offer.session_id)?;
+    let media_receiver =
+        match UdpMediaReceiver::bind(unspecified_address(remote), offer.session_id, media_key) {
+            Ok(receiver) => receiver,
+            Err(error) => {
+                write_control_message(
+                    &mut channel,
+                    &ControlMessage::DisplayDecision(DisplayDecision {
+                        session_id: offer.session_id,
+                        accepted: false,
+                        reason: Some(format!("could not bind the UDP media receiver: {error}")),
+                        media_port: None,
+                    }),
+                )?;
+                return Ok(());
+            }
+        };
+    media_receiver
+        .set_read_timeout(Some(SESSION_IO_TIMEOUT))
+        .map_err(|error| error.to_string())?;
+    let media_port = media_receiver
+        .local_addr()
+        .map_err(|error| error.to_string())?
+        .port();
+    let media_endpoint = Arc::new(Mutex::new(ActiveMediaEndpoint::Receiver(Box::new(
+        media_receiver,
+    ))));
+    media_endpoint
+        .lock()
+        .map_err(|_| "media endpoint lock is poisoned")?
+        .local_addr()?;
     let session = DisplaySession {
         id: offer.session_id,
         peer_id: peer.id,
@@ -717,6 +917,7 @@ fn handle_incoming(
                 session_id: offer.session_id,
                 accepted: false,
                 reason: Some(error.to_string()),
+                media_port: None,
             }),
         )?;
         return Ok(());
@@ -731,20 +932,33 @@ fn handle_incoming(
             return Err("control session lock is poisoned".into());
         }
     }
+    match active_media.lock() {
+        Ok(mut media) => {
+            media.insert(offer.session_id, media_endpoint);
+        }
+        Err(_) => {
+            remove_session(active_signals, offer.session_id);
+            let _ = core.end_display_session(offer.session_id);
+            return Err("media session lock is poisoned".into());
+        }
+    }
     if let Err(error) = write_control_message(
         &mut channel,
         &ControlMessage::DisplayDecision(DisplayDecision {
             session_id: offer.session_id,
             accepted: true,
             reason: None,
+            media_port: Some(media_port),
         }),
     ) {
         let _ = core.end_display_session(offer.session_id);
         remove_session(active_signals, offer.session_id);
+        remove_media(active_media, offer.session_id);
         return Err(error);
     }
     run_server_session(channel, core, offer.session_id, runtime_shutdown, &signal);
     remove_session(active_signals, offer.session_id);
+    remove_media(active_media, offer.session_id);
     Ok(())
 }
 
@@ -1024,6 +1238,12 @@ fn remove_session(active_signals: &Mutex<HashMap<Uuid, Arc<AtomicBool>>>, sessio
     }
 }
 
+fn remove_media(active_media: &ActiveMediaMap, session_id: Uuid) {
+    if let Ok(mut media) = active_media.lock() {
+        media.remove(&session_id);
+    }
+}
+
 fn reap_finished_workers(workers: &Mutex<Vec<thread::JoinHandle<()>>>) {
     if let Ok(mut workers) = workers.lock() {
         let mut index = 0;
@@ -1128,7 +1348,7 @@ mod tests {
         let runtime_a =
             ControlRuntime::start_with_listener(credentials_a, Arc::clone(&core_a), listener_a)
                 .unwrap();
-        let _runtime_b = ControlRuntime::start_with_listener(
+        let runtime_b = ControlRuntime::start_with_listener(
             credentials_b.clone(),
             Arc::clone(&core_b),
             listener_b,
@@ -1152,13 +1372,29 @@ mod tests {
             core_b.snapshot().unwrap().active_session.unwrap().direction,
             SessionDirection::Receiving
         );
+        let encoded_access_unit = vec![0x65_u8; 70_000];
+        let stats = runtime_a
+            .send_test_media(session.id, 0, &encoded_access_unit)
+            .unwrap();
+        assert!(stats.datagrams > 1);
+        let received = loop {
+            if let Some(frame) = runtime_b.receive_test_media(session.id).unwrap() {
+                break frame;
+            }
+        };
+        assert_eq!(received.frame_id, 0);
+        assert!(received.keyframe);
+        assert_eq!(received.payload, encoded_access_unit);
 
         runtime_a.end_display_session(session.id).unwrap();
         assert!(wait_until(|| {
             core_a.snapshot().unwrap().active_session.is_none()
                 && core_b.snapshot().unwrap().active_session.is_none()
         }));
+        assert!(runtime_a.active_media.lock().unwrap().is_empty());
+        assert!(runtime_b.active_media.lock().unwrap().is_empty());
         drop(runtime_a);
+        drop(runtime_b);
         let _ = fs::remove_dir_all(data_a);
         let _ = fs::remove_dir_all(data_b);
     }

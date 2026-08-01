@@ -544,7 +544,7 @@ mod tests {
                 addresses: vec![],
                 control_port: 37_622,
                 pairing_port: 37_621,
-                protocol_version: 2,
+                protocol_version: 3,
             })
             .unwrap();
         let session_id = Uuid::new_v4();

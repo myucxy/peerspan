@@ -175,7 +175,7 @@ mod tests {
                 "public_key",
                 "0707070707070707070707070707070707070707070707070707070707070707",
             ),
-            ("protocol", "2"),
+            ("protocol", "3"),
             ("pairing_port", "37621"),
         ];
         let info = ServiceInfo::new(

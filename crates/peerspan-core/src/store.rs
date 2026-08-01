@@ -398,7 +398,7 @@ mod tests {
             addresses: vec!["192.168.1.20".into()],
             control_port: 37_622,
             pairing_port: 37_621,
-            protocol_version: 2,
+            protocol_version: 3,
         };
         core.trust_device(device.clone()).unwrap();
 
@@ -428,7 +428,7 @@ mod tests {
             addresses: vec!["192.168.1.20".into()],
             control_port: 37_622,
             pairing_port: 37_621,
-            protocol_version: 2,
+            protocol_version: 3,
         };
         core.trust_device(device.clone()).unwrap();
 
@@ -473,7 +473,7 @@ mod tests {
             addresses: Vec::new(),
             control_port: 37_622,
             pairing_port: 37_621,
-            protocol_version: 2,
+            protocol_version: 3,
         })
         .unwrap();
         core.start_display_session(session.clone()).unwrap();

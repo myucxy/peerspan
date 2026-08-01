@@ -30,6 +30,8 @@ TLS 控制通道使用 `rustls`、`rcgen` 和 `x509-parser`。它们都是由 `C
 
 虚拟显示器桌面生命周期使用 Windows 自带的 Software Device 与 Configuration Manager API，Rust 绑定由现有 `windows-sys` 依赖提供，不需要向 `D:\Dev\Env` 添加工具。驱动开发安装脚本会修改系统驱动仓库，选择信任测试证书时还会修改本机证书库，因此不属于常规构建步骤，自动验证不得执行。
 
+媒体数据报核心使用 Cargo 管理的 `chacha20poly1305`、`socket2` 和 `zeroize`，不需要新增系统环境；Windows 套接字缓冲调整仍由操作系统 API 完成。
+
 ## Rust 环境变量
 
 当前 Rust 使用项目外的固定目录：

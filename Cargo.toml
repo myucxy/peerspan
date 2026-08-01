@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "apps/desktop/src-tauri",
     "crates/peerspan-core",
+    "crates/peerspan-media",
     "crates/peerspan-protocol",
 ]
 

@@ -31,7 +31,7 @@ const previewSnapshot: AppSnapshot = {
       addresses: ["192.168.1.20"],
       controlPort: 37622,
       pairingPort: 37621,
-      protocolVersion: 2,
+      protocolVersion: 3,
     },
     {
       id: "a43cc1f0-f2f7-48c7-9327-6a278414a3f0",
@@ -46,7 +46,7 @@ const previewSnapshot: AppSnapshot = {
       addresses: ["192.168.1.35"],
       controlPort: 37622,
       pairingPort: 37621,
-      protocolVersion: 2,
+      protocolVersion: 3,
     },
   ],
   trustedDevices: [],

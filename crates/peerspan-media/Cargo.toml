@@ -1,0 +1,13 @@
+[package]
+name = "peerspan-media"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+chacha20poly1305 = { version = "0.11", features = ["zeroize"] }
+socket2 = "0.6"
+thiserror.workspace = true
+uuid.workspace = true
+zeroize = { version = "1", features = ["zeroize_derive"] }

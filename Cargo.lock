@@ -382,6 +382,7 @@ dependencies = [
  "cfg-if",
  "cipher",
  "cpufeatures 0.3.0",
+ "zeroize",
 ]
 
 [[package]]
@@ -394,6 +395,7 @@ dependencies = [
  "chacha20",
  "cipher",
  "poly1305",
+ "zeroize",
 ]
 
 [[package]]
@@ -2468,6 +2470,7 @@ dependencies = [
  "hex",
  "mdns-sd",
  "peerspan-core",
+ "peerspan-media",
  "peerspan-protocol",
  "rand_core 0.6.4",
  "rcgen",
@@ -2482,6 +2485,17 @@ dependencies = [
  "uuid",
  "windows-sys 0.61.2",
  "x509-parser",
+ "zeroize",
+]
+
+[[package]]
+name = "peerspan-media"
+version = "0.1.0"
+dependencies = [
+ "chacha20poly1305",
+ "socket2",
+ "thiserror 2.0.19",
+ "uuid",
  "zeroize",
 ]
 
@@ -5014,6 +5028,20 @@ name = "zeroize"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
+dependencies = [
+ "zeroize_derive",
+]
+
+[[package]]
+name = "zeroize_derive"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c50655cbb0fe3fc43170059e702f1ce5e19b84cec58dc87b037a09935c2f328"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "zerotrie"

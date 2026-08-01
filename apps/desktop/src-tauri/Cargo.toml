@@ -18,6 +18,7 @@ ed25519-dalek = { version = "2.2", features = ["rand_core"] }
 hex = "0.4"
 mdns-sd = "0.20.3"
 peerspan-core = { path = "../../../crates/peerspan-core" }
+peerspan-media = { path = "../../../crates/peerspan-media" }
 peerspan-protocol = { path = "../../../crates/peerspan-protocol" }
 rcgen = "0.13"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
